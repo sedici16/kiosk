@@ -94,10 +94,18 @@ def down():
 
 def action_held():
     """True while any joystick button is held - use as an extra 'fire' key."""
+    return button_held()
+
+
+def button_held(*which):
+    """True while one of the given button ids is held (any button if none given).
+    Use specific ids when 'any button' is too broad - e.g. a platformer where
+    only A/B should jump, not Select/Start."""
     for j in _sticks:
-        for b in range(j.get_numbuttons()):
+        n = j.get_numbuttons()
+        for b in (which or range(n)):
             try:
-                if j.get_button(b):
+                if b < n and j.get_button(b):
                     return True
             except pygame.error:
                 pass

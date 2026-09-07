@@ -492,8 +492,9 @@ def gameWorld(level):
                 result = "win"
                 done = True
 
-        # fold in the arcade stick: held direction + any button = jump
-        j_up = kiosk_joy.up() or kiosk_joy.action_held()
+        # fold in the arcade stick: stick left/right to move, stick up or the
+        # A/B buttons to jump (not every button - Select/Start are the exit combo)
+        j_up = kiosk_joy.up() or kiosk_joy.button_held(0, 3)
         eff_up, eff_left, eff_right = up or j_up, left or kiosk_joy.left(), right or kiosk_joy.right()
 
         camera.update(character)
