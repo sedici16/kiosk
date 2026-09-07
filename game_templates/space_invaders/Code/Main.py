@@ -210,6 +210,7 @@ class CRT:
     def __init__(self):
         self.tv = pygame.image.load("../Graphics/TV.png").convert_alpha()
         self.tv = pygame.transform.scale(self.tv, (screen_width, screen_height))
+        self.create_crt_lines()   # bake the scanlines once, not every frame
 
     def create_crt_lines(self):
         line_height = 3
@@ -220,7 +221,6 @@ class CRT:
 
     def draw(self):
         self.tv.set_alpha(randint(75, 90))
-        self.create_crt_lines()
         screen.blit(self.tv, (0, 0))
 
 
@@ -255,14 +255,14 @@ if __name__ == "__main__":
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            if event.type == pygame.KEYDOWN and game_over:
-                if event.key == pygame.K_r:
+            if event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_q):
+                    pygame.quit()
+                    sys.exit()
+                if game_over and event.key == pygame.K_r:
                     game = Game()
                     game_over = False
                     game_won = False
-                elif event.key == pygame.K_ESCAPE:
-                    pygame.quit()
-                    sys.exit()
             if kiosk_joy.is_action(event) and game_over:
                 game = Game()
                 game_over = False

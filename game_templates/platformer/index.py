@@ -405,6 +405,9 @@ def gameWorld(level):
                 if event.key == pygame.K_r:
                     result = "restart"
                     done = True
+                if event.key in (pygame.K_ESCAPE, pygame.K_q):
+                    pygame.quit()
+                    quit()
 
             elif event.type == pygame.KEYUP:
                 if event.key == pygame.K_SPACE or event.key == pygame.K_UP:
@@ -418,7 +421,9 @@ def gameWorld(level):
             pygame.quit()
             quit()
 
-        # draw background
+        # draw background (fill first: on the Pi the real surface is bigger than
+        # WIN_WIDTH x WIN_HEIGHT, so clear the extra area instead of leaving junk)
+        screen.fill(DARK)
         screen.blit(background, (0, 0))
 
         #when character hits coin, collect points

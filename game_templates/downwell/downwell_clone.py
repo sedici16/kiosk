@@ -26,7 +26,7 @@ OVERRIDES_FILE = os.path.join(BASE_DIR, "overrides.json")
 NUM_CHUNK_SLOTS = 4
 DEFAULT_REPEAT_COUNT = 10
 
-SCALE = 1.15 if ON_PI else 1.5  # window/tile/sprite/physics scale; a touch smaller on the Pi
+SCALE = 1.15 if ON_PI else 1.5  # window/tile/sprite/physics scale
 LEVEL_Y_START = int(80 * SCALE)
 
 # Physics tick rate. A little slower on the Pi - eases the pace and the load.
@@ -689,6 +689,8 @@ def main():
                     game.press_action()
                 elif event.key == pygame.K_r:
                     game.reset()
+                elif event.key in (pygame.K_ESCAPE, pygame.K_q):
+                    running = False
             elif kiosk_joy.is_action(event):
                 if game.game_over or game.win:
                     game.reset()
