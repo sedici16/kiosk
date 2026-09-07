@@ -113,6 +113,66 @@ def load_terrain_tiles(size):
     return [load_sprite(f, size, base_dir=TERRAIN_DIR) for f in files]
 
 
+def make_player_sprites(size):
+    """The falling guy (a red gunboots diver, Downwell style), pixel-art in the
+    game's palette. Four poses: falling straight, drifting left, drifting right,
+    and springing up from a jump. Left/right are the fall pose leant into the
+    move. Returned as {'fall','fall_left','fall_right','jump'}."""
+    W, H = size
+    RED = (234, 70, 70)
+    DRK = (150, 28, 28)
+    VIS = (30, 18, 26)          # dark visor slit
+    FIRE = (255, 196, 92)       # gunboot flame
+
+    def draw_figure(flame_len, arms_up):
+        s = pygame.Surface((W, H), pygame.SRCALPHA)
+        cx = W // 2
+        hr = int(W * 0.28)
+        # helmet
+        head = pygame.Rect(0, 0, hr * 2, hr * 2)
+        head.center = (cx, 2 + hr)
+        pygame.draw.ellipse(s, RED, head)
+        pygame.draw.ellipse(s, DRK, head, 2)
+        # visor slit
+        vis = pygame.Rect(0, 0, int(hr * 1.6), max(3, int(hr * 0.5)))
+        vis.center = (cx, head.centery + int(hr * 0.15))
+        pygame.draw.ellipse(s, VIS, vis)
+        # torso
+        torso = pygame.Rect(0, 0, int(W * 0.46), int(H * 0.34))
+        torso.midtop = (cx, head.bottom - 3)
+        pygame.draw.rect(s, RED, torso, border_radius=4)
+        pygame.draw.rect(s, DRK, torso, 2, border_radius=4)
+        # arms
+        aw = max(3, int(W * 0.16))
+        for side in (-1, 1):
+            ax = cx + side * (torso.width // 2 - 1)
+            if arms_up:
+                pygame.draw.line(s, RED, (ax, torso.top + 4),
+                                 (ax + side * 3, head.centery), aw)
+            else:
+                pygame.draw.line(s, RED, (ax, torso.top + 4),
+                                 (ax + side * 5, torso.bottom - 2), aw)
+        # legs + gunboots + flame
+        lw = max(3, int(W * 0.17))
+        for side in (-1, 1):
+            fx = cx + side * int(W * 0.16)
+            pygame.draw.line(s, RED, (cx + side * 2, torso.bottom - 2), (fx, H - 10), lw)
+            pygame.draw.rect(s, DRK, (fx - 4, H - 12, 9, 7))          # boot
+            if flame_len:
+                pygame.draw.polygon(s, FIRE, [(fx - 3, H - 5), (fx + 4, H - 5),
+                                              (fx + int(0.5), H - 5 + flame_len)])
+        return s
+
+    fall = draw_figure(flame_len=4, arms_up=True)
+    jump = draw_figure(flame_len=max(7, int(H * 0.22)), arms_up=False)
+    return {
+        "fall": fall,
+        "fall_left": pygame.transform.rotate(fall, 20),
+        "fall_right": pygame.transform.rotate(fall, -20),
+        "jump": jump,
+    }
+
+
 class Bullet:
     def __init__(self, x, y, vx=0.0):
         self.x = x
@@ -286,7 +346,7 @@ class DownwellClone:
             pygame.mixer.init(frequency=22050, size=-16, channels=1)
         except pygame.error:
             pass
-        self.screen = kiosk_screen.setup(WIDTH, HEIGHT, "Downwell Clone")
+        self.screen = kiosk_screen.setup(WIDTH, HEIGHT, "Il Pozzo")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont(None, int(28 * SCALE))
 
@@ -300,7 +360,8 @@ class DownwellClone:
                     pass
 
         self.terrain_tiles = load_terrain_tiles((TILE, TILE))
-        self.player_sprite = load_sprite("player.png", (int(26 * SCALE), int(26 * SCALE)))
+        self.player_sprites = make_player_sprites((int(30 * SCALE), int(36 * SCALE)))
+        self.player_sprite = self.player_sprites["fall"]
         self.enemy_tile = load_sprite("enemy.png", (int(30 * SCALE), int(30 * SCALE)))
         self.gem_tile = load_sprite("gem.png", (int(18 * SCALE), int(18 * SCALE)))
         self.bullet_sprite = load_sprite("bullet.png", (int(10 * SCALE), int(10 * SCALE)))
@@ -322,6 +383,15 @@ class DownwellClone:
             self._text_cache[slot] = entry
         return entry[1]
 
+    def _player_pose(self):
+        if self.vel_y < -1.5:                 # still rising from a jump
+            return "jump"
+        if self.moving < 0:
+            return "fall_left"
+        if self.moving > 0:
+            return "fall_right"
+        return "fall"
+
     def reset(self):
         self.ammo = MAX_AMMO
         self.hp = MAX_HP
@@ -333,6 +403,7 @@ class DownwellClone:
         self.invuln_timer = 0
         self.on_ground = False
         self.vel_y = 0.0
+        self.moving = 0            # -1 / 0 / 1: which way the guy is steering
         self.particles = []
         self.rapid_fire_timer = 0
         self.spread_timer = 0
@@ -415,10 +486,13 @@ class DownwellClone:
     def handle_input(self, keys):
         if self.game_over or self.win:
             return
+        self.moving = 0
         if keys[pygame.K_LEFT] or kiosk_joy.left():
             self.player_x -= MOVE_SPEED
+            self.moving = -1
         if keys[pygame.K_RIGHT] or kiosk_joy.right():
             self.player_x += MOVE_SPEED
+            self.moving = 1
         margin = int(12 * SCALE)
         self.player_x = max(margin, min(WIDTH - margin, self.player_x))
 
@@ -638,7 +712,8 @@ class DownwellClone:
 
         if self.invuln_timer == 0 or self.invuln_timer % 6 < 3:
             py = HEIGHT // 3
-            self.screen.blit(self.player_sprite, self.player_sprite.get_rect(center=(int(self.player_x), py)))
+            spr = self.player_sprites[self._player_pose()]
+            self.screen.blit(spr, spr.get_rect(center=(int(self.player_x), py)))
 
         pad = int(10 * SCALE)
         heart_step = int(26 * SCALE)

@@ -169,6 +169,33 @@ def _launcher(slot_dir, run_rel, data_dir_env):
     return "\n".join(lines) + "\n"
 
 
+def remove_slot(slot_name, progress=None):
+    """Delete a Ports slot (its folder + .sh) from the Pi. Returns (ok, msg)."""
+    cfg = load_config()
+    if not cfg:
+        return False, "retropie.json mancante."
+    try:
+        import paramiko
+    except ImportError:
+        return False, "paramiko non installato."
+    cli = paramiko.SSHClient()
+    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        cli.connect(cfg["host"], username=cfg["user"], password=cfg.get("password"),
+                    timeout=10, allow_agent=False, look_for_keys=False)
+        ports = cfg["ports_dir"]
+        _run(cli, "rm -rf -- {0} {1}".format(
+            _shq(posixpath.join(ports, slot_name)),
+            _shq(posixpath.join(ports, slot_name + ".sh"))))
+        if progress:
+            progress('Rimosso lo slot "{}"'.format(slot_name))
+        return True, 'Slot "{}" rimosso.'.format(slot_name)
+    except Exception as exc:  # noqa: BLE001
+        return False, "Errore: {}".format(exc)
+    finally:
+        cli.close()
+
+
 def push(slot_name, run_rel, local_dir, data_dir_env=False, progress=None):
     """Copy ``local_dir`` to ``<ports_dir>/<slot_name>/`` and (re)write
     ``<slot_name>.sh``. Returns (ok, message). ``progress`` is an optional

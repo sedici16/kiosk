@@ -49,11 +49,11 @@ THUMB_FRAMES = {"downwell": 160, "space_invaders": 130, "platformer": 220, "raci
 # each push overwrites it); "pi_data_dir" flags games needing DOWNWELL_DATA_DIR.
 GAMES = {
     "downwell": {
-        "label": "Downwell",
+        "label": "Il Pozzo",
         "blurb": "Scendi nel pozzo infinito sparando ai nemici e raccogliendo gemme.",
         "template": os.path.join(TEMPLATES_DIR, "downwell"),
         "run": ("downwell_clone.py", "."),
-        "pi_slot": "Downwell",
+        "pi_slot": "Il Pozzo",
         "pi_data_dir": True,
         "editors": [
             ("Modifica Livello", "level_editor.py"),
