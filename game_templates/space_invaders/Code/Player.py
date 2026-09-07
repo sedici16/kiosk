@@ -1,8 +1,11 @@
 import pygame
 from Laser import Laser
 import os
+import platform as _pf
 
 import kiosk_joy
+
+SPD = 3 if _pf.machine().lower().startswith(("arm", "aarch")) else 1
 
 
 # File Importing (Changes Directory to Where the File is Saved)
@@ -52,7 +55,7 @@ class Player(pygame.sprite.Sprite):
             self.rect.right = self.max_x_constraint
 
     def shoot_laser(self):
-        self.lasers.add(Laser(self.rect.center, -8, self.rect.bottom))
+        self.lasers.add(Laser(self.rect.center, -8 * SPD, self.rect.bottom))
 
     def update(self):
         self.get_input()

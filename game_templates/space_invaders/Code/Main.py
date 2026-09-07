@@ -2,10 +2,18 @@
 
 import os
 import sys
+import platform as _platform
 
 # cd to this file's folder BEFORE importing the sibling modules - some of them
 # also chdir on import, which would make __file__ resolve wrong if we waited.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# The cabinet Pi has no GPU. Skip the CRT overlay (a 600x600 per-pixel-alpha
+# blit, ~130 ms/frame there), use partial screen updates, cap the frame rate
+# low, and scale all movement by SPD so the game still plays at its real speed.
+ON_PI = _platform.machine().lower().startswith(("arm", "aarch"))
+SPD = 3 if ON_PI else 1
+FRAME_CAP = 20 if ON_PI else 60
 
 import pygame
 from Player import Player
@@ -32,7 +40,7 @@ class Game:
         pygame.display.set_icon(pygame_icon)
 
         # Player Setup
-        player_sprite = Player((screen_width / 2, screen_height), screen_width, 5)
+        player_sprite = Player((screen_width / 2, screen_height), screen_width, 5 * SPD)
         self.player = pygame.sprite.GroupSingle(player_sprite)
 
         # Health and Score Setup
@@ -44,7 +52,7 @@ class Game:
 
         # Obstacle Setup
         self.shape = Obstacle.shape
-        self.block_size = 6
+        self.block_size = 10 if ON_PI else 6   # fewer, bigger blocks on the Pi
         self.blocks = pygame.sprite.Group()
         self.obstacle_amount = 4
         self.obstacle_x_positions = [num * (screen_width / self.obstacle_amount) for num in range(self.obstacle_amount)]
@@ -54,7 +62,7 @@ class Game:
         self.aliens = pygame.sprite.Group()
         self.alien_lasers = pygame.sprite.Group()
         self.alien_setup(rows = 6, cols = 8)
-        self.alien_direction = 1
+        self.alien_direction = SPD
 
         # Extra Alien Setup
         self.extra = pygame.sprite.GroupSingle()
@@ -97,11 +105,11 @@ class Game:
         all_aliens = self.aliens.sprites()
         for alien in all_aliens:
             if alien.rect.right >= screen_width:
-                self.alien_direction = -1
-                self.alien_move_down(2)
+                self.alien_direction = -SPD
+                self.alien_move_down(2 * SPD)
             elif alien.rect.left <= 0:
-                self.alien_direction = 1
-                self.alien_move_down(2)
+                self.alien_direction = SPD
+                self.alien_move_down(2 * SPD)
 
     def alien_move_down(self, distance):
         if self.aliens:
@@ -111,7 +119,7 @@ class Game:
     def alien_shoot(self):
         if self.aliens.sprites():
             random_alien = choice(self.aliens.sprites())
-            laser_sprite = Laser(random_alien.rect.center, 6, screen_height)
+            laser_sprite = Laser(random_alien.rect.center, 6 * SPD, screen_height)
             self.alien_lasers.add(laser_sprite)
             self.laser_sound.play()
 
@@ -186,17 +194,18 @@ class Game:
         if not self.aliens.sprites():
             raise GameOver(True)
 
-    def run(self):
-        # Draw and Update All Sprite Groups
+    def update(self):
+        # one 60 Hz logic step (may raise GameOver)
         self.player.update()
         self.alien_lasers.update()
         self.extra.update()
-
         self.aliens.update(self.alien_direction)
         self.alien_position_checker()
         self.extra_alien_timer()
         self.collision_checks()
+        self.victory_message()
 
+    def draw(self):
         self.player.sprite.lasers.draw(screen)
         self.player.draw(screen)
         self.blocks.draw(screen)
@@ -205,7 +214,10 @@ class Game:
         self.extra.draw(screen)
         self.display_lives()
         self.display_score()
-        self.victory_message()
+
+    def run(self):
+        self.update()
+        self.draw()
 
 
 class CRT:
@@ -236,10 +248,9 @@ if __name__ == "__main__":
     game = Game()
     crt = CRT()
 
-    # Alien fire every 800 ms, timed off the frame clock. (pygame.time.set_timer
-    # spawns a thread that crashes with "take_gil: NULL tstate" on the Pi's old
-    # pygame 2.0.3 / Python 3.5 build.)
-    alien_shoot_ms = 0
+    # Alien fire every 800 ms off the frame clock. (pygame.time.set_timer spawns
+    # a thread that crashes the Pi's old pygame with take_gil: NULL tstate.)
+    alien_shoot_ms = 0.0
 
     over_font = pygame.font.Font("../Font/Pixeled.ttf", 28)
     hint_font = pygame.font.Font("../Font/Pixeled.ttf", 14)
@@ -272,27 +283,31 @@ if __name__ == "__main__":
                 game_over = False
                 game_won = False
 
-        if not game_over:
-            alien_shoot_ms += clock.get_time()
-            if alien_shoot_ms >= 800:
-                alien_shoot_ms = 0
-                game.alien_shoot()
-
         if kiosk_joy.wants_quit():
             pygame.quit()
             sys.exit()
 
-        screen.fill((30, 30, 30))
+        clock.tick(FRAME_CAP)
         if not game_over:
+            alien_shoot_ms += clock.get_time()
+            if alien_shoot_ms >= 800:
+                alien_shoot_ms = 0.0
+                game.alien_shoot()
             try:
-                game.run()
+                game.update()
             except GameOver as result:
                 game_over = True
                 game_won = result.won
+
+        screen.fill((30, 30, 30), (0, 0, screen_width, screen_height))
         if game_over:
             draw_end_screen()
-        crt.draw()
-
-        kiosk_joy.blit_exit_hint(screen)
-        pygame.display.flip()
-        clock.tick(60)
+        else:
+            game.draw()
+        if not ON_PI:
+            crt.draw()
+        kiosk_joy.blit_exit_hint(screen, (0, 0, screen_width, screen_height))
+        if ON_PI:
+            pygame.display.update((0, 0, screen_width, screen_height))
+        else:
+            pygame.display.flip()

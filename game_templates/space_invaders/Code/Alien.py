@@ -1,9 +1,12 @@
 import pygame
 import os
+import platform as _pf
 
 
 # File Importing (Changes Directory to Where the File is Saved)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+SPD = 3 if _pf.machine().lower().startswith(("arm", "aarch")) else 1
 
 
 class Alien(pygame.sprite.Sprite):
@@ -28,10 +31,10 @@ class Extra(pygame.sprite.Sprite):
         
         if side == "right":
             x = screen_width + 50
-            self.speed = -3
+            self.speed = -3 * SPD
         else:
             x = -50
-            self.speed = 3
+            self.speed = 3 * SPD
 
         self.rect = self.image.get_rect(topleft = (x, 80))
 

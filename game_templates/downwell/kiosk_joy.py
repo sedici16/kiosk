@@ -152,9 +152,11 @@ def wants_quit():
 _hint_font = [None]
 
 
-def blit_exit_hint(surface):
+def blit_exit_hint(surface, area=None):
     """Bottom-right 'hold 2 buttons to exit' note, with a fill bar that grows
-    while the gesture is held. Safe every frame; no-op with no joystick."""
+    while the gesture is held. Safe every frame; no-op with no joystick.
+    `area` = (x, y, w, h) to place the note inside that box instead of the whole
+    surface - use it when only part of the surface is shown/updated."""
     if not _sticks:
         return
     if _hint_font[0] is None:
@@ -162,8 +164,12 @@ def blit_exit_hint(surface):
     img = _hint_font[0].render("2 tasti insieme  =  esci", True, (235, 235, 235))
     pad = 6
     bw, bh = img.get_width() + pad * 2, img.get_height() + pad * 2
-    w, h = surface.get_size()
-    x, y = w - bw - 4, h - bh - 4
+    if area:
+        ax, ay, aw, ah = area
+    else:
+        ax, ay = 0, 0
+        aw, ah = surface.get_size()
+    x, y = ax + aw - bw - 4, ay + ah - bh - 4
     bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
     bg.fill((0, 0, 0, 140))
     prog = quit_progress()
