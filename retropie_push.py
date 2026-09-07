@@ -159,7 +159,9 @@ def push(slot_name, run_rel, local_dir, data_dir_env=False, progress=None):
 
         note = ""
         if was_new:
-            rc, out, _ = _run(cli, "pgrep -x emulationstation >/dev/null && echo YES || echo NO")
+            # NB: pgrep -x fails here - Linux truncates the process name to
+            # "emulationstatio" (15 chars). Match the full command line instead.
+            _rc, out, _ = _run(cli, "pgrep -f emulationstation >/dev/null && echo YES || echo NO")
             if "YES" in out:
                 say("Aggiorno la lista giochi (riavvio EmulationStation)...")
                 _run(cli, "touch /tmp/es-restart; pkill -f emulationstation || true")
