@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Kiosk runtime data (created by dashboard_app.py next to the script)
+downwell_sessions/
+downwell_saved_games/
+
+# per-run high scores inside game templates
+game_templates/*/high_scores.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

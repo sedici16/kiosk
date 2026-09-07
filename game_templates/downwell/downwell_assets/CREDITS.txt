@@ -1,0 +1,10 @@
+Sprites: Kenney 1-Bit Platformer Pack (https://kenney.nl/assets/1-bit-platformer-pack)
+License: CC0 1.0 (public domain) - no attribution required, included here as good practice.
+
+Files used (renamed from Tiles/Default):
+  ground.png      <- tile_0374.png
+  spike.png       <- tile_0166.png
+  enemy.png       <- tile_0240.png
+  gem.png         <- tile_0082.png
+  heart_full.png  <- tile_0040.png
+  heart_empty.png <- tile_0042.png

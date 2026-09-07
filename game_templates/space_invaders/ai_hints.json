@@ -1,0 +1,11 @@
+{
+  "analysis": "Classico Space Invaders: griglia 6x8 di alieni che scendono, 4 bunker distruttibili, nave Extra da 500 punti e 3 vite. Manca una progressione: gli alieni non accelerano quando si diradano e dopo la vittoria non parte una nuova ondata. Il feedback è povero (solo un lampo bianco quando colpisci) e non c'è schermata iniziale né punteggio record da battere.",
+  "suggestions": [
+    "Fai accelerare gli alieni man mano che ne restano pochi",
+    "Aggiungi power-up che cadono dagli alieni distrutti",
+    "Aggiungi un'animazione di esplosione colorata quando colpisci un alieno",
+    "Aggiungi tremolio dello schermo e un suono quando perdi una vita",
+    "Riduci il cooldown del laser per sparare piu spesso",
+    "Mostra il punteggio record e dai una vita bonus ogni 1000 punti"
+  ]
+}

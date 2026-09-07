@@ -1,0 +1,731 @@
+import os
+import sys
+import json
+import time
+import shutil
+import subprocess
+import threading
+import queue
+import compileall
+import io
+import contextlib
+import tkinter as tk
+from tkinter import font as tkfont, messagebox
+
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = ImageTk = None
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, "game_templates")
+SESSIONS_DIR = os.path.join(BASE_DIR, "downwell_sessions")
+SAVED_DIR = os.path.join(BASE_DIR, "downwell_saved_games")
+UNDO_DIR = os.path.join(SESSIONS_DIR, "_undo")
+GAME_SHOT = os.path.join(BASE_DIR, "_game_shot.py")
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+os.makedirs(SAVED_DIR, exist_ok=True)
+os.makedirs(UNDO_DIR, exist_ok=True)
+
+CLAUDE_EXE = shutil.which("claude") or os.path.join(
+    os.path.expanduser("~"), ".local", "bin", "claude.exe"
+)
+CLAUDE_MODEL = "sonnet"
+
+SESSION_MINUTES = 30
+
+# how many frames to render before grabbing a thumbnail, per game
+THUMB_FRAMES = {"downwell": 160, "space_invaders": 130, "platformer": 220, "racing": 150}
+
+# Each game the visitor can pick. "run" is (script path, working dir) relative to
+# the session directory; "editors" are extra Downwell-only authoring tools.
+GAMES = {
+    "downwell": {
+        "label": "Downwell",
+        "blurb": "Scendi nel pozzo infinito sparando ai nemici e raccogliendo gemme.",
+        "template": os.path.join(TEMPLATES_DIR, "downwell"),
+        "run": ("downwell_clone.py", "."),
+        "editors": [
+            ("Modifica Livello", "level_editor.py"),
+            ("Modifica Sprite", "asset_editor.py"),
+            ("Modifica Suoni", "sound_editor.py"),
+        ],
+    },
+    "space_invaders": {
+        "label": "Space Invaders",
+        "blurb": "Il classico arcade: difendi la Terra dagli alieni che scendono.",
+        "template": os.path.join(TEMPLATES_DIR, "space_invaders"),
+        "run": (os.path.join("Code", "Main.py"), "."),
+        "editors": [],
+    },
+    "platformer": {
+        "label": "Game of Crowns",
+        "blurb": "Un platform 2D: salta di piattaforma in piattaforma, prendi le monete, evita il fuoco.",
+        "template": os.path.join(TEMPLATES_DIR, "platformer"),
+        "run": ("index.py", "."),
+        "editors": [],
+    },
+    "racing": {
+        "label": "Corsa Retro",
+        "blurb": "Sfreccia sulla strada, schiva le auto in arrivo e fai piu punti che puoi.",
+        "template": os.path.join(TEMPLATES_DIR, "racing"),
+        "run": ("race.py", "."),
+        "editors": [],
+    },
+}
+
+GUARDRAILS = (
+    "Sei un assistente che modifica un piccolo videogioco in Python (Pygame) per un "
+    "visitatore di una fiera. Regole tassative:\n"
+    "- Modifica SOLTANTO i file di gioco dentro la cartella di lavoro corrente.\n"
+    "- Non uscire mai da questa cartella e non toccare altri file del computer.\n"
+    "- Fai la modifica piu piccola e mirata possibile per soddisfare la richiesta.\n"
+    "- Non aggiungere nuove librerie o dipendenze, non scaricare nulla da internet.\n"
+    "- Non cancellare file. Dopo la modifica il gioco deve restare eseguibile.\n"
+    "- Mantieni tutto adatto a famiglie e bambini.\n"
+    "- Non eseguire comandi di shell e non provare a lanciare o compilare il gioco: "
+    "limitati a leggere e modificare i file.\n"
+    "- Alla fine rispondi in italiano, in 1-2 frasi, dicendo cosa hai cambiato.\n\n"
+    "Richiesta del visitatore: "
+)
+
+
+def safe_session_name(name):
+    keep = [c if c.isalnum() else "_" for c in name.strip()]
+    cleaned = "".join(keep).strip("_") or "ospite"
+    return cleaned[:40]
+
+
+def env_for(game_key, session_dir):
+    env = os.environ.copy()
+    env.pop("SDL_VIDEODRIVER", None)
+    env.pop("SDL_AUDIODRIVER", None)
+    if game_key == "downwell":
+        env["DOWNWELL_DATA_DIR"] = session_dir
+    return env
+
+
+def load_hints(game_key):
+    """Return the pre-computed {'analysis': str, 'suggestions': [str]*6} for a
+    game, or None. Generated once by generate_hints.py into each template."""
+    path = os.path.join(TEMPLATES_DIR, game_key, "ai_hints.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("analysis") and len(data.get("suggestions", [])) == 6:
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def list_saved():
+    """Saved games in SAVED_DIR, newest first: {dir, game_key, name, label, when}."""
+    out = []
+    if not os.path.isdir(SAVED_DIR):
+        return out
+    for entry in sorted(os.listdir(SAVED_DIR), reverse=True):
+        folder = os.path.join(SAVED_DIR, entry)
+        if not os.path.isdir(folder):
+            continue
+        game_key, name, when = None, entry, ""
+        meta_path = os.path.join(folder, "session_meta.json")
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                m = json.load(f)
+            game_key = m.get("game_key")
+            name = m.get("name") or entry
+            when = m.get("saved_at", "")
+        except (OSError, json.JSONDecodeError):
+            # older folders: parse "YYYYMMDD_HHMMSS_<gamekey>_<name>"
+            rest = entry[16:] if len(entry) > 16 else entry
+            for gk in GAMES:
+                if rest.startswith(gk + "_"):
+                    game_key, name = gk, rest[len(gk) + 1:]
+                    break
+            when = entry[:15]
+        if game_key not in GAMES:
+            continue
+        out.append({
+            "dir": folder, "game_key": game_key, "name": name,
+            "label": GAMES[game_key]["label"], "when": when,
+        })
+    return out
+
+
+def launch_game_dir(game_key, folder):
+    """Run the game located in `folder` (a template, session, or saved copy)."""
+    script_rel, cwd_rel = GAMES[game_key]["run"]
+    subprocess.Popen(
+        [sys.executable, os.path.join(folder, script_rel)],
+        cwd=os.path.join(folder, cwd_rel), env=env_for(game_key, folder),
+    )
+
+
+def snapshot_game(game_key, folder):
+    """Best-effort: render the game headless and save folder/thumb.png. Silent on failure."""
+    if not os.path.exists(GAME_SHOT):
+        return
+    script_rel, cwd_rel = GAMES[game_key]["run"]
+    out = os.path.join(folder, "thumb.png")
+    frames = THUMB_FRAMES.get(game_key, 150)
+    env = env_for(game_key, folder)
+    env["SDL_VIDEODRIVER"] = "dummy"
+    env["SDL_AUDIODRIVER"] = "dummy"
+    try:
+        subprocess.run(
+            [sys.executable, GAME_SHOT, os.path.join(folder, script_rel), out, str(frames)],
+            cwd=os.path.join(folder, cwd_rel), env=env,
+            capture_output=True, timeout=45,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
+_THUMB_CACHE = {}
+
+def get_thumb(game_key, folder=None, size=(240, 168)):
+    """A Tk image for a game: the folder's own thumb.png if present, else the
+    template's. Returns None if PIL is missing or nothing can be loaded."""
+    if ImageTk is None:
+        return None
+    candidates = []
+    if folder:
+        candidates.append(os.path.join(folder, "thumb.png"))
+    candidates.append(os.path.join(TEMPLATES_DIR, game_key, "thumb.png"))
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        key = (path, size, os.path.getmtime(path))
+        if key not in _THUMB_CACHE:
+            try:
+                img = Image.open(path).convert("RGB")
+                img.thumbnail(size, Image.LANCZOS)
+                _THUMB_CACHE[key] = ImageTk.PhotoImage(img)
+            except Exception:
+                continue
+        return _THUMB_CACHE[key]
+    return None
+
+
+def compile_check(session_dir):
+    """Return a list of (path, error) for any .py file that no longer parses."""
+    errors = []
+    buf = io.StringIO()
+    for root, _dirs, files in os.walk(session_dir):
+        if os.path.basename(root) == "__pycache__":
+            continue
+        for fname in files:
+            if not fname.endswith(".py"):
+                continue
+            path = os.path.join(root, fname)
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                ok = compileall.compile_file(path, quiet=2, force=True)
+            if not ok:
+                rel = os.path.relpath(path, session_dir)
+                errors.append(rel)
+    return errors
+
+
+class Dashboard:
+    def __init__(self, root):
+        self.root = root
+        root.title("Postazione Fiera - Modifica il Gioco con l'IA")
+        root.geometry("1400x880")
+        root.configure(bg="#12141a")
+
+        self.title_font = tkfont.Font(family="Segoe UI", size=22, weight="bold")
+        self.subtitle_font = tkfont.Font(family="Segoe UI", size=11)
+        self.button_font = tkfont.Font(family="Segoe UI", size=13, weight="bold")
+        self.big_font = tkfont.Font(family="Segoe UI", size=16, weight="bold")
+        self.mono_font = tkfont.Font(family="Consolas", size=20, weight="bold")
+
+        self.session_dir = None
+        self.session_name = None
+        self.game_key = None
+        self.deadline = None
+        self.timer_job = None
+
+        self.ai_queue = queue.Queue()
+        self.ai_running = False
+        self.ai_proc = None
+        self.can_undo = False
+
+        self.container = tk.Frame(root, bg="#12141a")
+        self.container.pack(fill="both", expand=True)
+
+        self.show_login()
+
+    def _clear(self):
+        if self.timer_job:
+            self.root.after_cancel(self.timer_job)
+            self.timer_job = None
+        for w in self.container.winfo_children():
+            w.destroy()
+
+    # ------------------------------------------------------------ Login screen
+    def show_login(self):
+        self._clear()
+        self.session_dir = None
+        self.session_name = None
+        self.game_key = None
+        self.can_undo = False
+
+        tk.Label(
+            self.container, text="Modifica il Gioco con l'IA", font=self.title_font,
+            fg="#7fd8c8", bg="#12141a",
+        ).pack(pady=(56, 6))
+        tk.Label(
+            self.container,
+            text="Scrivi il tuo nome, scegli un gioco e hai 30 minuti per trasformarlo a parole.",
+            font=self.subtitle_font, fg="#c8ccd6", bg="#12141a",
+        ).pack(pady=(0, 26))
+
+        name_var = tk.StringVar()
+        entry = tk.Entry(self.container, textvariable=name_var, font=self.button_font, width=24, justify="center")
+        entry.pack(pady=(0, 22))
+        entry.focus_set()
+
+        cards = tk.Frame(self.container, bg="#12141a")
+        cards.pack(pady=(0, 10))
+
+        def start(game_key):
+            name = name_var.get().strip() or "Ospite"
+            self.start_session(name, game_key)
+
+        for game_key, meta in GAMES.items():
+            card = tk.Frame(cards, bg="#181b22", highlightbackground="#2a2f36", highlightthickness=1)
+            card.pack(side="left", padx=14, ipadx=8, ipady=8)
+            thumb = get_thumb(game_key, size=(240, 165))
+            if thumb is not None:
+                tk.Label(card, image=thumb, bg="#181b22").pack(pady=(14, 4), padx=14)
+            tk.Label(card, text=meta["label"], font=self.big_font, fg="#7fd8c8", bg="#181b22").pack(pady=(6, 4), padx=18)
+            tk.Label(
+                card, text=meta["blurb"], font=self.subtitle_font, fg="#c8ccd6", bg="#181b22",
+                wraplength=240, justify="center",
+            ).pack(pady=(0, 12), padx=18)
+            tk.Button(
+                card, text="Scegli", font=self.button_font, bg="#3ea88f", fg="white",
+                activebackground="#4fc2a8", activeforeground="white", relief="flat", padx=22, pady=10,
+                command=lambda k=game_key: start(k),
+            ).pack(pady=(0, 14))
+
+        # ---- saved games: play again, or resume improving ----
+        saved = list_saved()
+        if not saved:
+            return
+
+        tk.Label(
+            self.container, text="Giochi salvati", font=("Segoe UI", 13, "bold"),
+            fg="#7fd8c8", bg="#12141a",
+        ).pack(pady=(24, 2))
+        tk.Label(
+            self.container,
+            text="\"Gioca\" apre la versione salvata. \"Riprendi\" la carica per continuare a migliorarla (serve il nome sopra).",
+            font=("Segoe UI", 9), fg="#8a8f9c", bg="#12141a",
+        ).pack(pady=(0, 8))
+
+        outer = tk.Frame(self.container, bg="#181b22")
+        outer.pack(fill="both", expand=True, padx=120, pady=(0, 20))
+        canvas = tk.Canvas(outer, bg="#181b22", highlightthickness=0, height=260)
+        sb = tk.Scrollbar(outer, command=canvas.yview)
+        inner = tk.Frame(canvas, bg="#181b22")
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw", width=840)
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        def play(s):
+            launch_game_dir(s["game_key"], s["dir"])
+
+        def resume(s):
+            name = name_var.get().strip() or "Ospite"
+            self.start_session(name, s["game_key"], source_dir=s["dir"])
+
+        def delete(s):
+            if not messagebox.askyesno(
+                "Elimina", f"Eliminare definitivamente il gioco salvato\n\"{s['label']} - {s['name']}\"?"
+            ):
+                return
+            shutil.rmtree(s["dir"], ignore_errors=True)
+            self.show_login()
+
+        for s in saved:
+            row = tk.Frame(inner, bg="#20242e")
+            row.pack(fill="x", pady=3, padx=4)
+            rthumb = get_thumb(s["game_key"], folder=s["dir"], size=(72, 54))
+            if rthumb is not None:
+                tk.Label(row, image=rthumb, bg="#20242e").pack(side="left", padx=(8, 4), pady=6)
+            txt = f"{s['label']}  -  {s['name']}"
+            if s["when"]:
+                txt += f"   ({s['when']})"
+            tk.Label(
+                row, text=txt, font=("Segoe UI", 10), fg="white", bg="#20242e", anchor="w",
+            ).pack(side="left", fill="x", expand=True, padx=10, pady=8)
+            tk.Button(
+                row, text="Elimina", font=("Segoe UI", 9, "bold"), bg="#8a3a3a", fg="white",
+                relief="flat", padx=10, pady=4, command=lambda s=s: delete(s),
+            ).pack(side="right", padx=(4, 8), pady=6)
+            tk.Button(
+                row, text="Riprendi", font=("Segoe UI", 9, "bold"), bg="#3ea88f", fg="white",
+                relief="flat", padx=10, pady=4, command=lambda s=s: resume(s),
+            ).pack(side="right", padx=4, pady=6)
+            tk.Button(
+                row, text="Gioca", font=("Segoe UI", 9, "bold"), bg="#4a7fd6", fg="white",
+                relief="flat", padx=10, pady=4, command=lambda s=s: play(s),
+            ).pack(side="right", padx=4, pady=6)
+
+    def start_session(self, name, game_key, source_dir=None):
+        meta = GAMES[game_key]
+        source = source_dir or meta["template"]
+        if not os.path.isdir(source):
+            messagebox.showerror("Errore", f"Cartella di origine mancante:\n{source}")
+            return
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        session_dir = os.path.join(SESSIONS_DIR, f"{stamp}_{game_key}_{safe_session_name(name)}")
+        shutil.copytree(source, session_dir)
+
+        self.session_name = name
+        self.game_key = game_key
+        self.session_dir = session_dir
+        self.deadline = time.time() + SESSION_MINUTES * 60
+        self.can_undo = False
+        self.show_main()
+        self.tick_timer()
+        self.root.after(120, self.poll_ai_queue)
+
+    # ------------------------------------------------------------- Main screen
+    def show_main(self):
+        self._clear()
+        meta = GAMES[self.game_key]
+
+        top = tk.Frame(self.container, bg="#12141a")
+        top.pack(fill="x", padx=20, pady=(16, 6))
+        tk.Label(
+            top, text=f"{meta['label']} - sessione di {self.session_name}",
+            font=self.title_font, fg="#7fd8c8", bg="#12141a",
+        ).pack(side="left")
+        self.timer_label = tk.Label(top, text="30:00", font=self.mono_font, fg="#f0c674", bg="#12141a")
+        self.timer_label.pack(side="right")
+
+        tools = tk.Frame(self.container, bg="#12141a")
+        tools.pack(fill="x", padx=20, pady=(10, 10))
+        self.play_btn = tk.Button(
+            tools, text="Gioca", font=self.button_font, bg="#4a7fd6", fg="white",
+            activebackground="#5c8fe0", activeforeground="white", relief="flat", padx=18, pady=10,
+            command=self.play_game,
+        )
+        self.play_btn.pack(side="left", padx=(0, 10))
+        for text, script in meta["editors"]:
+            tk.Button(
+                tools, text=text, font=self.button_font, bg="#2a2f3a", fg="white",
+                activebackground="#3a4150", activeforeground="white", relief="flat", padx=16, pady=10,
+                command=lambda s=script: self.launch_script(s),
+            ).pack(side="left", padx=(0, 10))
+        self.undo_btn = tk.Button(
+            tools, text="Annulla ultima modifica", font=self.button_font, bg="#3a3f4a", fg="white",
+            activebackground="#484f5c", activeforeground="white", relief="flat", padx=16, pady=10,
+            command=self.undo_last, state="disabled",
+        )
+        self.undo_btn.pack(side="right")
+
+        self._build_hints_panel()
+
+        ai_frame = tk.Frame(self.container, bg="#181b22")
+        ai_frame.pack(fill="both", expand=True, padx=20, pady=(4, 10))
+        tk.Label(
+            ai_frame, text="Assistente IA - descrivi a parole come vuoi cambiare il gioco",
+            font=self.subtitle_font, fg="#8a8f9c", bg="#181b22",
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        entry_row = tk.Frame(ai_frame, bg="#181b22")
+        entry_row.pack(fill="x", padx=12, pady=(0, 8))
+        self.ai_entry = tk.Entry(entry_row, font=self.subtitle_font)
+        self.ai_entry.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=6)
+        self.ai_entry.bind("<Return>", lambda e: self.apply_ai_request())
+        self.ai_button = tk.Button(
+            entry_row, text="Applica", font=self.button_font, bg="#4a7fd6", fg="white",
+            activebackground="#5c8fe0", activeforeground="white", relief="flat", padx=16, pady=6,
+            command=self.apply_ai_request,
+        )
+        self.ai_button.pack(side="left")
+
+        self.ai_log = tk.Text(
+            ai_frame, height=9, bg="#0b0d11", fg="#c8ccd6", font=("Consolas", 10),
+            relief="flat", highlightthickness=1, highlightbackground="#2a2f36", wrap="word",
+        )
+        self.ai_log.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.ai_log.config(state="disabled")
+
+        if not os.path.exists(CLAUDE_EXE):
+            self._log_ai("Claude Code non trovato - l'assistente IA non e' disponibile.")
+            self.ai_button.config(state="disabled")
+        else:
+            self._log_ai(
+                f"Pronto. Stai modificando {meta['label']}. Esempi: "
+                "\"rendi il giocatore piu veloce\", \"aggiungi un punteggio piu alto per i nemici gialli\", "
+                "\"cambia il colore dello sfondo in blu notte\"."
+            )
+
+        bottom = tk.Frame(self.container, bg="#12141a")
+        bottom.pack(fill="x", padx=20, pady=(0, 16))
+        tk.Button(
+            bottom, text="Termina e Salva", font=self.button_font, bg="#3ea88f", fg="white",
+            activebackground="#4fc2a8", activeforeground="white", relief="flat", padx=20, pady=10,
+            command=lambda: self.end_session(save=True),
+        ).pack(side="left", padx=(0, 10))
+        tk.Button(
+            bottom, text="Termina Senza Salvare", font=self.button_font, bg="#3a3f4a", fg="white",
+            activebackground="#484f5c", activeforeground="white", relief="flat", padx=20, pady=10,
+            command=lambda: self.end_session(save=False),
+        ).pack(side="left")
+
+    def _build_hints_panel(self):
+        hints = load_hints(self.game_key)
+        frame = tk.Frame(self.container, bg="#181b22")
+        frame.pack(fill="x", padx=20, pady=(4, 0))
+
+        if not hints:
+            tk.Label(
+                frame, text="(Nessun consiglio dell'IA disponibile per questo gioco.)",
+                font=self.subtitle_font, fg="#8a8f9c", bg="#181b22",
+            ).pack(anchor="w", padx=12, pady=10)
+            return
+
+        tk.Label(
+            frame, text="Consiglio dell'IA per questo gioco",
+            font=("Segoe UI", 12, "bold"), fg="#7fd8c8", bg="#181b22",
+        ).pack(anchor="w", padx=12, pady=(10, 2))
+        tk.Message(
+            frame, text=hints["analysis"], width=1040,
+            font=self.subtitle_font, fg="#dfe3ea", bg="#181b22", justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        tk.Label(
+            frame, text="Idee veloci - clicca per metterle nel riquadro qui sotto",
+            font=self.subtitle_font, fg="#8a8f9c", bg="#181b22",
+        ).pack(anchor="w", padx=12, pady=(0, 4))
+
+        grid = tk.Frame(frame, bg="#181b22")
+        grid.pack(fill="x", padx=10, pady=(0, 12))
+        for i in range(3):
+            grid.columnconfigure(i, weight=1, uniform="hint")
+        for idx, text in enumerate(hints["suggestions"][:6]):
+            r, c = divmod(idx, 3)
+            tk.Button(
+                grid, text=text, font=("Segoe UI", 10), bg="#252a35", fg="white",
+                activebackground="#333a48", activeforeground="white", relief="flat",
+                wraplength=320, justify="left", padx=10, pady=8,
+                command=lambda t=text: self.use_suggestion(t),
+            ).grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
+
+    def use_suggestion(self, text):
+        if self.ai_running:
+            return
+        self.ai_entry.delete(0, "end")
+        self.ai_entry.insert(0, text)
+        self.ai_entry.focus_set()
+
+    def tick_timer(self):
+        remaining = int(self.deadline - time.time())
+        if remaining <= 0:
+            self.timer_label.config(text="00:00")
+            messagebox.showinfo("Tempo scaduto", "I 30 minuti sono terminati! Grazie per aver giocato.")
+            self.end_session(save=True)
+            return
+        mins, secs = divmod(remaining, 60)
+        self.timer_label.config(text=f"{mins:02d}:{secs:02d}")
+        if remaining <= 60:
+            self.timer_label.config(fg="#e05a5a")
+        self.timer_job = self.root.after(1000, self.tick_timer)
+
+    # ------------------------------------------------------------- Launch game
+    def _launch(self, script_rel, cwd_rel="."):
+        script_path = os.path.join(self.session_dir, script_rel)
+        cwd = os.path.join(self.session_dir, cwd_rel)
+        subprocess.Popen(
+            [sys.executable, script_path], cwd=cwd, env=env_for(self.game_key, self.session_dir)
+        )
+
+    def play_game(self):
+        script_rel, cwd_rel = GAMES[self.game_key]["run"]
+        self._launch(script_rel, cwd_rel)
+
+    def launch_script(self, script):
+        self._launch(script, ".")
+
+    # ------------------------------------------------------------ AI assistant
+    def _log_ai(self, text, tag=None):
+        self.ai_log.config(state="normal")
+        self.ai_log.insert("end", text + "\n")
+        self.ai_log.see("end")
+        self.ai_log.config(state="disabled")
+
+    def apply_ai_request(self):
+        if self.ai_running:
+            return
+        prompt = self.ai_entry.get().strip()
+        if not prompt:
+            return
+        self.ai_entry.delete(0, "end")
+        self._log_ai(f"\n> {prompt}")
+
+        # Snapshot for undo.
+        undo_path = os.path.join(UNDO_DIR, os.path.basename(self.session_dir))
+        if os.path.isdir(undo_path):
+            shutil.rmtree(undo_path)
+        shutil.copytree(self.session_dir, undo_path)
+
+        self.ai_running = True
+        self.ai_button.config(state="disabled", text="Lavoro...")
+        self.ai_entry.config(state="disabled")
+        self.undo_btn.config(state="disabled")
+        self._log_ai("  L'IA sta leggendo e modificando il gioco...")
+        threading.Thread(target=self._run_claude, args=(prompt,), daemon=True).start()
+
+    def _run_claude(self, prompt):
+        cmd = [
+            CLAUDE_EXE, "-p", GUARDRAILS + prompt,
+            "--add-dir", self.session_dir,
+            "--allowedTools", "Read", "Edit", "Write", "Glob", "Grep",
+            "--disallowedTools", "Bash", "PowerShell", "KillShell", "BashOutput",
+            "WebFetch", "WebSearch", "Task", "TodoWrite", "NotebookEdit",
+            "--permission-mode", "acceptEdits",
+            "--model", CLAUDE_MODEL,
+            "--output-format", "stream-json", "--verbose",
+        ]
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=self.session_dir, env=os.environ.copy(),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+            )
+        except OSError as exc:
+            self.ai_queue.put(("error", f"Impossibile avviare Claude Code: {exc}"))
+            return
+        self.ai_proc = proc
+        final_text = ""
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "assistant":
+                for block in event.get("message", {}).get("content", []):
+                    if block.get("type") == "text" and block.get("text", "").strip():
+                        self.ai_queue.put(("text", block["text"].strip()))
+                    elif block.get("type") == "tool_use":
+                        self.ai_queue.put(("tool", self._describe_tool(block)))
+            elif etype == "result":
+                final_text = event.get("result", "") or final_text
+                if event.get("is_error"):
+                    self.ai_queue.put(("error", final_text or "L'IA ha riportato un errore."))
+                else:
+                    self.ai_queue.put(("done", final_text))
+        err = proc.stderr.read()
+        rc = proc.wait()
+        if rc != 0 and not final_text:
+            self.ai_queue.put(("error", (err or f"Claude Code terminato con codice {rc}").strip()))
+
+    @staticmethod
+    def _describe_tool(block):
+        name = block.get("name", "?")
+        inp = block.get("input", {}) or {}
+        target = inp.get("file_path") or inp.get("path") or inp.get("pattern") or ""
+        if target:
+            target = os.path.basename(str(target))
+        labels = {"Read": "Leggo", "Edit": "Modifico", "Write": "Riscrivo", "Glob": "Cerco", "Grep": "Cerco"}
+        return f"  - {labels.get(name, name)} {target}".rstrip()
+
+    def poll_ai_queue(self):
+        try:
+            while True:
+                kind, payload = self.ai_queue.get_nowait()
+                if kind in ("text", "tool"):
+                    self._log_ai(payload)
+                elif kind == "done":
+                    self._finish_ai(payload, ok=True)
+                elif kind == "error":
+                    self._finish_ai(payload, ok=False)
+        except queue.Empty:
+            pass
+        self.root.after(150, self.poll_ai_queue)
+
+    def _finish_ai(self, message, ok):
+        self.ai_running = False
+        self.ai_proc = None
+        self.ai_button.config(state="normal", text="Applica")
+        self.ai_entry.config(state="normal")
+
+        errors = compile_check(self.session_dir)
+        if errors:
+            self._log_ai(
+                "  ATTENZIONE: dopo la modifica alcuni file non sono validi: "
+                + ", ".join(errors)
+                + "\n  Premi 'Annulla ultima modifica' per tornare indietro."
+            )
+        elif ok:
+            if message:
+                self._log_ai(f"  {message}")
+            self._log_ai("  Fatto. Premi 'Gioca' per provare.")
+        else:
+            self._log_ai(f"  Non e' andata a buon fine: {message}")
+            self._log_ai("  Puoi riprovare, o premere 'Annulla ultima modifica'.")
+
+        self.can_undo = True
+        self.undo_btn.config(state="normal")
+
+    def undo_last(self):
+        if self.ai_running or not self.can_undo:
+            return
+        undo_path = os.path.join(UNDO_DIR, os.path.basename(self.session_dir))
+        if not os.path.isdir(undo_path):
+            self._log_ai("  Niente da annullare.")
+            return
+        shutil.rmtree(self.session_dir)
+        shutil.copytree(undo_path, self.session_dir)
+        self.can_undo = False
+        self.undo_btn.config(state="disabled")
+        self._log_ai("  Ultima modifica annullata: il gioco e' tornato com'era prima.")
+
+    # ------------------------------------------------------------- Session end
+    def end_session(self, save):
+        if self.ai_proc is not None:
+            try:
+                self.ai_proc.kill()
+            except OSError:
+                pass
+        if save and self.session_dir:
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            dest = os.path.join(
+                SAVED_DIR, f"{stamp}_{self.game_key}_{safe_session_name(self.session_name)}"
+            )
+            shutil.copytree(self.session_dir, dest)
+            try:
+                with open(os.path.join(dest, "session_meta.json"), "w", encoding="utf-8") as f:
+                    json.dump({"game_key": self.game_key, "name": self.session_name,
+                               "saved_at": time.strftime("%Y-%m-%d %H:%M")}, f, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
+            gk = self.game_key
+            threading.Thread(target=snapshot_game, args=(gk, dest), daemon=True).start()
+            messagebox.showinfo("Salvato", f"Partita salvata come {os.path.basename(dest)}")
+        undo_path = os.path.join(UNDO_DIR, os.path.basename(self.session_dir)) if self.session_dir else None
+        if undo_path and os.path.isdir(undo_path):
+            shutil.rmtree(undo_path, ignore_errors=True)
+        self.show_login()
+
+
+def main():
+    root = tk.Tk()
+    Dashboard(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

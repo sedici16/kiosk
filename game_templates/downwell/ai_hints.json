@@ -1,0 +1,11 @@
+{
+  "analysis": "Il gioco ha già le basi di Downwell: sparo con gli stivali che rallenta la caduta, salto sui nemici, gemme, spine e power-up rapid/spread con 3 cuori. Però manca un contatore combo che premi le uccisioni concatenate, non c'è musica né scossa dello schermo sugli impatti, lo sfondo è un riempimento nero piatto e la profondità non dà ricompense oltre al punteggio.",
+  "suggestions": [
+    "Aumenta spine e nemici man mano che scendi più in profondità",
+    "Aggiungi un mini-boss da battere sul fondo del pozzo",
+    "Aggiungi uno sfondo con strati che scorrono e pareti decorate",
+    "Aggiungi scossa dello schermo e musica di sottofondo ritmata",
+    "Aggiungi checkpoint così i bambini non ricominciano da capo",
+    "Dai una ricompensa a fine corsa spendendo le gemme in potenziamenti"
+  ]
+}

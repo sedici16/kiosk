@@ -1,0 +1,11 @@
+{
+  "analysis": "Il gioco chiede 25 monete per far apparire la corona, ma l'HUD mostra solo vite ed energia: i bimbi non sanno quante monete mancano. La palette a due soli colori e il respawn sempre all'inizio sono duri, e la tazza nemica non si puo saltare ne sconfiggere. Mancano un feedback di vittoria, checkpoint e piu di un livello.",
+  "suggestions": [
+    "Mostra sull'HUD quante monete mancano alla corona",
+    "Rendi i nemici sconfiggibili saltandoci sopra",
+    "Aggiungi piattaforme mobili e trampolini elastici",
+    "Colora monete, fuoco e sfondo con tinte vivaci",
+    "Fai coriandoli e un suono festoso quando prendi la corona",
+    "Dai una stella bonus se finisci senza perdere vite"
+  ]
+}
