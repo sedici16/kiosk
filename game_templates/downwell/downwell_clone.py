@@ -26,8 +26,11 @@ OVERRIDES_FILE = os.path.join(BASE_DIR, "overrides.json")
 NUM_CHUNK_SLOTS = 4
 DEFAULT_REPEAT_COUNT = 10
 
-SCALE = 1.0 if ON_PI else 1.5  # window/tile/sprite/physics scale; smaller on the Pi for speed
+SCALE = 1.15 if ON_PI else 1.5  # window/tile/sprite/physics scale; a touch smaller on the Pi
 LEVEL_Y_START = int(80 * SCALE)
+
+# Physics tick rate. A little slower on the Pi - eases the pace and the load.
+SIM_HZ = 50 if ON_PI else 60
 
 WIDTH, HEIGHT = int(400 * SCALE), int(600 * SCALE)
 TILE = int(32 * SCALE)
@@ -45,7 +48,7 @@ SPIKE_SPAWN_CHANCE = 0.25
 POWERUP_SPAWN_CHANCE = 0.5
 
 PARTICLE_COLOR = (150, 150, 155)  # gray, matching the inert/terrain palette
-MAX_PARTICLES = 30 if ON_PI else 150
+MAX_PARTICLES = 40 if ON_PI else 150
 
 # Only entities within this vertical band of the player are checked/collided each
 # frame - the shaft holds thousands of platforms and iterating all of them was
@@ -309,7 +312,15 @@ class DownwellClone:
             "spread": load_sprite("powerup_spread.png", (int(22 * SCALE), int(22 * SCALE))),
         }
 
+        self._text_cache = {}   # slot -> (string, rendered surface); re-render only on change
         self.reset()
+
+    def _text(self, slot, s, color):
+        entry = self._text_cache.get(slot)
+        if entry is None or entry[0] != s:
+            entry = (s, self.font.render(s, True, color))
+            self._text_cache[slot] = entry
+        return entry[1]
 
     def reset(self):
         self.ammo = MAX_AMMO
@@ -351,9 +362,9 @@ class DownwellClone:
         self.platforms.sort(key=lambda p: p.y)
         self._plat_ys = [p.y for p in self.platforms]
 
-    def _platforms_near(self, y):
-        lo = bisect.bisect_left(self._plat_ys, y - CULL_DIST)
-        hi = bisect.bisect_right(self._plat_ys, y + CULL_DIST)
+    def _platforms_near(self, y, dist=CULL_DIST):
+        lo = bisect.bisect_left(self._plat_ys, y - dist)
+        hi = bisect.bisect_right(self._plat_ys, y + dist)
         return self.platforms[lo:hi]
 
     def _generate_shaft(self):
@@ -582,7 +593,7 @@ class DownwellClone:
         cam_y = self.player_y - HEIGHT // 3
         top, bot = cam_y - TILE, cam_y + HEIGHT
 
-        for plat in self._platforms_near(cam_y + HEIGHT // 2):
+        for plat in self._platforms_near(cam_y + HEIGHT // 2, HEIGHT):
             if plat.y < top or plat.y > bot:      # off-camera - skip before any work
                 continue
             sy = plat.y - cam_y
@@ -636,36 +647,31 @@ class DownwellClone:
             self.screen.blit(img, (pad + i * heart_step, pad))
 
         line2 = pad + int(28 * SCALE)
-        ammo_text = self.font.render("Ammo: {}/{}".format(self.ammo, MAX_AMMO), True, (255, 255, 255))
-        self.screen.blit(ammo_text, (pad, line2))
+        self.screen.blit(self._text("ammo", "Ammo: {}/{}".format(self.ammo, MAX_AMMO), (255, 255, 255)), (pad, line2))
         hud_right = int(130 * SCALE)
-        score_text = self.font.render("Score: {}".format(self.score), True, (255, 255, 255))
-        self.screen.blit(score_text, (WIDTH - hud_right, pad))
-        depth_text = self.font.render("Depth: {}".format(self.depth), True, (200, 200, 200))
-        self.screen.blit(depth_text, (WIDTH - hud_right, line2))
+        self.screen.blit(self._text("score", "Score: {}".format(self.score), (255, 255, 255)), (WIDTH - hud_right, pad))
+        self.screen.blit(self._text("depth", "Depth: {}".format(self.depth), (200, 200, 200)), (WIDTH - hud_right, line2))
 
         line3 = line2 + int(28 * SCALE)
         if self.rapid_fire_timer > 0:
             secs = self.rapid_fire_timer // 60 + 1
-            txt = self.font.render("Rapid Fire: {}s".format(secs), True, (255, 210, 120))
-            self.screen.blit(txt, (pad, line3))
+            self.screen.blit(self._text("rapid", "Rapid Fire: {}s".format(secs), (255, 210, 120)), (pad, line3))
             line3 += int(28 * SCALE)
         if self.spread_timer > 0:
             secs = self.spread_timer // 60 + 1
-            txt = self.font.render("3-Way Shot: {}s".format(secs), True, (255, 210, 120))
-            self.screen.blit(txt, (pad, line3))
+            self.screen.blit(self._text("spread", "3-Way Shot: {}s".format(secs), (255, 210, 120)), (pad, line3))
 
         if self.game_over:
-            msg = self.font.render("GAME OVER - press R to restart", True, (255, 90, 90))
+            msg = self._text("end", "GAME OVER - press R to restart", (255, 90, 90))
             self.screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
         elif self.win:
-            msg = self.font.render("BOTTOM REACHED! press R to restart", True, (120, 255, 150))
+            msg = self._text("end", "BOTTOM REACHED! press R to restart", (120, 255, 150))
             self.screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
 
         pygame.display.flip()
 
 
-STEP_MS = 1000.0 / 60.0     # fixed physics timestep
+STEP_MS = 1000.0 / SIM_HZ   # fixed physics timestep
 MAX_STEPS = 5               # cap catch-up steps so a hitch can't spiral
 
 
