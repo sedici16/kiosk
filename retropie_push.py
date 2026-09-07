@@ -18,6 +18,7 @@ dashboard simply hides the "send to RetroPie" button.
 Note: the target Pi runs Python 3.5 (no f-strings) - the game templates are kept
 3.5-compatible so a pushed copy runs there unchanged.
 """
+import ast
 import json
 import os
 import posixpath
@@ -86,6 +87,62 @@ def _keep(name):
     return name not in _SKIP_NAMES and not name.endswith(_SKIP_SUFFIX)
 
 
+# --- Python 3.5 compatibility check (the Pi runs 3.5.3) -------------------
+_BAD_NODES = {
+    "JoinedStr": 'f-string (usa "...".format(...))',
+    "NamedExpr": "operatore walrus :=",
+}
+
+
+def _reachable_py_files(entry_path):
+    """entry_path plus every local .py module it (transitively) imports."""
+    found, todo = set(), [os.path.abspath(entry_path)]
+    while todo:
+        p = todo.pop()
+        if p in found or not os.path.isfile(p):
+            continue
+        found.add(p)
+        try:
+            tree = ast.parse(open(p, "r", encoding="utf-8").read(), p)
+        except SyntaxError:
+            continue
+        here = os.path.dirname(p)
+        for node in ast.walk(tree):
+            mods = []
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                mods = [node.module.split(".")[0]]
+            for m in mods:
+                cand = os.path.join(here, m + ".py")
+                if os.path.isfile(cand):
+                    todo.append(cand)
+    return found
+
+
+def py35_issues(local_dir, entry_rel):
+    """Return [(relpath, line, message)] for anything in the code that would run
+    on the Pi will break under Python 3.5 (f-strings, walrus, syntax errors)."""
+    out = []
+    entry = os.path.join(local_dir, entry_rel.replace("/", os.sep))
+    for path in sorted(_reachable_py_files(entry)):
+        rel = os.path.relpath(path, local_dir)
+        try:
+            tree = ast.parse(open(path, "r", encoding="utf-8").read(), path)
+        except SyntaxError as exc:
+            out.append((rel, exc.lineno or 0, "errore di sintassi: %s" % exc.msg))
+            continue
+        seen = set()
+        for node in ast.walk(tree):
+            label = _BAD_NODES.get(type(node).__name__)
+            if label:
+                key = (rel, getattr(node, "lineno", 0))
+                if key not in seen:
+                    seen.add(key)
+                    out.append((rel, key[1], label))
+    return out
+
+
 def _upload_tree(sftp, local_dir, remote_dir):
     _mkdir_p(sftp, remote_dir)
     for entry in sorted(os.listdir(local_dir)):
@@ -123,6 +180,12 @@ def push(slot_name, run_rel, local_dir, data_dir_env=False, progress=None):
     cfg = load_config()
     if not cfg:
         return False, "retropie.json mancante o incompleto."
+
+    bad = py35_issues(local_dir, run_rel)
+    if bad:
+        lines = "; ".join("%s riga %d: %s" % (r, ln, m) for r, ln, m in bad[:6])
+        return False, ("Non invio: il codice non e' compatibile con il "
+                       "Raspberry Pi (Python 3.5). " + lines)
 
     try:
         import paramiko
