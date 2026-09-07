@@ -118,31 +118,33 @@ def is_action(event):
     return event.type == pygame.JOYBUTTONDOWN
 
 
-# ---- exit combo -----------------------------------------------------------
-# On the cabinet there is no keyboard, so every game needs a stick way out.
-# DragonRise pads (per RetroPie's config): button 1 = Select, 2 = Start,
-# 6/7 = shoulders. Accept Select+Start (the RetroPie-standard gesture) or both
-# shoulders, held briefly so a stray double-press during play can't quit.
-_QUIT_COMBOS = ((1, 2), (6, 7))
-QUIT_HOLD_FRAMES = 30           # ~0.5 s at 60 fps
+# ---- exit gesture --------------------------------------------------------
+# No keyboard on the cabinet, so every game needs a stick way out. The games
+# only ever use ONE button at a time, so "hold any two buttons together" is a
+# safe, encoder-independent exit - works whatever the pad's button numbering.
+QUIT_HOLD_FRAMES = 36           # ~0.6 s at 60 fps - deliberate, not a mash
 _quit_held = [0]
 
 
 def _combo_down():
     for j in _sticks:
-        n = j.get_numbuttons()
-        for combo in _QUIT_COMBOS:
-            try:
-                if all(b < n and j.get_button(b) for b in combo):
-                    return True
-            except pygame.error:
-                pass
+        try:
+            if sum(1 for b in range(j.get_numbuttons()) if j.get_button(b)) >= 2:
+                return True
+        except pygame.error:
+            pass
     return False
 
 
+def quit_progress():
+    """0.0 while the exit gesture isn't held, ramping to 1.0 as it completes -
+    for on-screen feedback."""
+    return min(1.0, _quit_held[0] / float(QUIT_HOLD_FRAMES))
+
+
 def wants_quit():
-    """Call once per frame. True once the exit combo (Select+Start, or both
-    shoulder buttons) has been held ~half a second - treat it like ESC."""
+    """Call once per frame. True once any two joystick buttons have been held
+    together ~0.4 s - treat it like pressing ESC."""
     _quit_held[0] = _quit_held[0] + 1 if _combo_down() else 0
     return _quit_held[0] >= QUIT_HOLD_FRAMES
 
@@ -151,15 +153,21 @@ _hint_font = [None]
 
 
 def blit_exit_hint(surface):
-    """Small bottom-right 'hold Select+Start to exit' note. Safe to call every
-    frame; no-op if there is no joystick attached."""
+    """Bottom-right 'hold 2 buttons to exit' note, with a fill bar that grows
+    while the gesture is held. Safe every frame; no-op with no joystick."""
     if not _sticks:
         return
     if _hint_font[0] is None:
         _hint_font[0] = pygame.font.Font(None, 22)
-    img = _hint_font[0].render("Select + Start  =  esci", True, (235, 235, 235))
-    bg = pygame.Surface((img.get_width() + 10, img.get_height() + 6), pygame.SRCALPHA)
-    bg.fill((0, 0, 0, 130))
+    img = _hint_font[0].render("2 tasti insieme  =  esci", True, (235, 235, 235))
+    pad = 6
+    bw, bh = img.get_width() + pad * 2, img.get_height() + pad * 2
     w, h = surface.get_size()
-    surface.blit(bg, (w - bg.get_width() - 4, h - bg.get_height() - 4))
-    surface.blit(img, (w - img.get_width() - 9, h - img.get_height() - 7))
+    x, y = w - bw - 4, h - bh - 4
+    bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
+    bg.fill((0, 0, 0, 140))
+    prog = quit_progress()
+    if prog > 0:
+        pygame.draw.rect(bg, (90, 200, 120, 200), (0, bh - 4, int(bw * prog), 4))
+    surface.blit(bg, (x, y))
+    surface.blit(img, (x + pad, y + pad))
