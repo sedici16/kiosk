@@ -2,6 +2,8 @@ import pygame
 from Laser import Laser
 import os
 
+import kiosk_joy
+
 
 # File Importing (Changes Directory to Where the File is Saved)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -26,12 +28,12 @@ class Player(pygame.sprite.Sprite):
     def get_input(self):
         keys = pygame.key.get_pressed()
 
-        if keys[pygame.K_RIGHT]:
+        if keys[pygame.K_RIGHT] or kiosk_joy.right():
             self.rect.x += self.speed
-        elif keys[pygame.K_LEFT]:
+        elif keys[pygame.K_LEFT] or kiosk_joy.left():
             self.rect.x -= self.speed
 
-        if keys[pygame.K_SPACE] and self.ready:
+        if (keys[pygame.K_SPACE] or kiosk_joy.action_held()) and self.ready:
             self.shoot_laser()
             self.ready = False
             self.laser_time = pygame.time.get_ticks()

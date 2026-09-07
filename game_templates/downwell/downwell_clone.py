@@ -3,6 +3,8 @@ import json
 import random
 import pygame
 
+import kiosk_joy
+
 # DOWNWELL_DATA_DIR lets a dashboard/session-manager point this same engine at a
 # per-user working copy of assets/levels/overrides without duplicating the code.
 DATA_DIR = os.environ.get("DOWNWELL_DATA_DIR") or os.path.dirname(os.path.abspath(__file__))
@@ -265,6 +267,7 @@ def build_from_chunks(chunks, terrain_count):
 class DownwellClone:
     def __init__(self):
         pygame.init()
+        kiosk_joy.init()
         try:
             pygame.mixer.init(frequency=22050, size=-16, channels=1)
         except pygame.error:
@@ -276,7 +279,7 @@ class DownwellClone:
 
         self.sounds = {}
         for key in SOUND_ACTIONS:
-            path = os.path.join(SOUND_DIR, f"{key}.wav")
+            path = os.path.join(SOUND_DIR, key + ".wav")
             if os.path.exists(path):
                 try:
                     self.sounds[key] = pygame.mixer.Sound(path)
@@ -381,9 +384,9 @@ class DownwellClone:
     def handle_input(self, keys):
         if self.game_over or self.win:
             return
-        if keys[pygame.K_LEFT]:
+        if keys[pygame.K_LEFT] or kiosk_joy.left():
             self.player_x -= MOVE_SPEED
-        if keys[pygame.K_RIGHT]:
+        if keys[pygame.K_RIGHT] or kiosk_joy.right():
             self.player_x += MOVE_SPEED
         margin = int(12 * SCALE)
         self.player_x = max(margin, min(WIDTH - margin, self.player_x))
@@ -392,7 +395,7 @@ class DownwellClone:
             self.fire_cooldown -= 1
         # Rapid fire power-up: holding the button auto-fires instead of needing repeated presses.
         if (self.rapid_fire_timer > 0 and not self.on_ground and not self.game_over and not self.win
-                and keys[pygame.K_SPACE] and self.fire_cooldown <= 0):
+                and (keys[pygame.K_SPACE] or kiosk_joy.action_held()) and self.fire_cooldown <= 0):
             self._fire_shot()
             self.fire_cooldown = RAPID_FIRE_INTERVAL
 
@@ -604,23 +607,23 @@ class DownwellClone:
             self.screen.blit(img, (pad + i * heart_step, pad))
 
         line2 = pad + int(28 * SCALE)
-        ammo_text = self.font.render(f"Ammo: {self.ammo}/{MAX_AMMO}", True, (255, 255, 255))
+        ammo_text = self.font.render("Ammo: {}/{}".format(self.ammo, MAX_AMMO), True, (255, 255, 255))
         self.screen.blit(ammo_text, (pad, line2))
         hud_right = int(130 * SCALE)
-        score_text = self.font.render(f"Score: {self.score}", True, (255, 255, 255))
+        score_text = self.font.render("Score: {}".format(self.score), True, (255, 255, 255))
         self.screen.blit(score_text, (WIDTH - hud_right, pad))
-        depth_text = self.font.render(f"Depth: {self.depth}", True, (200, 200, 200))
+        depth_text = self.font.render("Depth: {}".format(self.depth), True, (200, 200, 200))
         self.screen.blit(depth_text, (WIDTH - hud_right, line2))
 
         line3 = line2 + int(28 * SCALE)
         if self.rapid_fire_timer > 0:
             secs = self.rapid_fire_timer // 60 + 1
-            txt = self.font.render(f"Rapid Fire: {secs}s", True, (255, 210, 120))
+            txt = self.font.render("Rapid Fire: {}s".format(secs), True, (255, 210, 120))
             self.screen.blit(txt, (pad, line3))
             line3 += int(28 * SCALE)
         if self.spread_timer > 0:
             secs = self.spread_timer // 60 + 1
-            txt = self.font.render(f"3-Way Shot: {secs}s", True, (255, 210, 120))
+            txt = self.font.render("3-Way Shot: {}s".format(secs), True, (255, 210, 120))
             self.screen.blit(txt, (pad, line3))
 
         if self.game_over:
@@ -645,6 +648,11 @@ def main():
                     game.press_action()
                 elif event.key == pygame.K_r:
                     game.reset()
+            elif kiosk_joy.is_action(event):
+                if game.game_over or game.win:
+                    game.reset()
+                else:
+                    game.press_action()
         keys = pygame.key.get_pressed()
         game.handle_input(keys)
         game.update()

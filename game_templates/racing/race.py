@@ -20,7 +20,10 @@ from sys import exit as sys_exit
 
 import pygame
 
+import kiosk_joy
+
 pygame.init()
+kiosk_joy.init()
 
 # ------------------------------------------------------------------ look & feel
 # retro 1-bit dungeon palette - identical to Game of Crowns
@@ -262,24 +265,29 @@ class Race:
                 if ev.key in (pygame.K_ESCAPE, pygame.K_q):
                     self.quit()
                 elif ev.key == pygame.K_SPACE:
-                    if self.state == "PLAY":
-                        self.state = "PAUSE"
-                    elif self.state == "PAUSE":
-                        self.state = "PLAY"
-                    elif self.state == "OVER":
-                        self.reset()
+                    self._toggle()
                 elif ev.key == pygame.K_r and self.state == "OVER":
                     self.reset()
+            if kiosk_joy.is_action(ev) and self.state != "PLAY":
+                self._toggle()          # a button resumes / restarts; in play it's the gas
+
+    def _toggle(self):
+        if self.state == "PLAY":
+            self.state = "PAUSE"
+        elif self.state == "PAUSE":
+            self.state = "PLAY"
+        elif self.state == "OVER":
+            self.reset()
 
     def update(self):
         keys = pygame.key.get_pressed()
-        boost = keys[pygame.K_w] or keys[pygame.K_UP]
+        boost = keys[pygame.K_w] or keys[pygame.K_UP] or kiosk_joy.up() or kiosk_joy.action_held()
         eff = self.speed + (BOOST_EXTRA if boost else 0.0)
 
         steer = PLAYER_STEER_SPEED * (0.45 if self.slip > 0 else 1.0)
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+        if keys[pygame.K_LEFT] or keys[pygame.K_a] or kiosk_joy.left():
             self.px -= steer
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d] or kiosk_joy.right():
             self.px += steer
         if self.slip > 0:
             self.slip -= 1
@@ -301,7 +309,7 @@ class Race:
                 if abs(e["x"] - self.px) < CAR_W + NEARMISS_GAP:
                     self.score += NEARMISS_BONUS
                     self.popups.append({"x": self.px + CAR_W / 2, "y": self.py - 6,
-                                        "txt": f"+{NEARMISS_BONUS}", "life": 45})
+                                        "txt": "+{}".format(NEARMISS_BONUS), "life": 45})
                 e["scored"] = True
             if e["y"] > WIN_H + 20:
                 self._respawn_enemy(e)
@@ -314,7 +322,7 @@ class Race:
                 self.score += COIN_BONUS
                 self.coins_got += 1
                 self.popups.append({"x": c["x"] + COIN_R, "y": c["y"],
-                                    "txt": f"+{COIN_BONUS}", "life": 40})
+                                    "txt": "+{}".format(COIN_BONUS), "life": 40})
                 self._recycle(c, COIN_R * 2, -260, -80)
             elif c["y"] > WIN_H + 20:
                 self._recycle(c, COIN_R * 2, -260, -80)
@@ -420,10 +428,10 @@ class Race:
         for f in self.confetti:
             pygame.draw.rect(s, LITE, (int(f["x"]), int(f["y"]), 3, 3))
 
-        s.blit(self.hud_font.render(f"PUNTI {self.score}", True, LITE), (14, 12))
-        s.blit(self.hud_font.render(f"RECORD {self.max_score}", True, LITE), (14, 40))
-        s.blit(self.hud_font.render(f"LIV {self.level + 1}", True, LITE), (14, 68))
-        s.blit(self.hud_font.render(f"MONETE {self.coins_got}", True, LITE), (14, 96))
+        s.blit(self.hud_font.render("PUNTI {}".format(self.score), True, LITE), (14, 12))
+        s.blit(self.hud_font.render("RECORD {}".format(self.max_score), True, LITE), (14, 40))
+        s.blit(self.hud_font.render("LIV {}".format(self.level + 1), True, LITE), (14, 68))
+        s.blit(self.hud_font.render("MONETE {}".format(self.coins_got), True, LITE), (14, 96))
 
         if self.record_timer > 0 and (self.record_timer // 6) % 2 == 0:
             r = self.mid_font.render("NUOVO RECORD!", True, LITE)
@@ -445,8 +453,9 @@ class Race:
                 "Premi SPAZIO per continuare",
             ])
         elif self.state == "OVER":
-            lines = [f"Punteggio:  {self.score}", f"Record:  {self.max_score}",
-                     f"Monete raccolte:  {self.coins_got}", ""]
+            lines = ["Punteggio:  {}".format(self.score),
+                     "Record:  {}".format(self.max_score),
+                     "Monete raccolte:  {}".format(self.coins_got), ""]
             if self.beaten_record:
                 lines.append("NUOVO RECORD!")
             lines.append("SPAZIO o R = ricomincia      ESC = esci")

@@ -2,9 +2,11 @@
 import pygame
 import os
 import random
+import kiosk_joy
 # Load assets relative to this file, regardless of the launcher's working dir.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 pygame.init()
+kiosk_joy.init()
 
 
 # Define some colors
@@ -481,8 +483,12 @@ def gameWorld(level):
                 result = "win"
                 done = True
 
+        # fold in the arcade stick: held direction + any button = jump
+        j_up = kiosk_joy.up() or kiosk_joy.action_held()
+        eff_up, eff_left, eff_right = up or j_up, left or kiosk_joy.left(), right or kiosk_joy.right()
+
         camera.update(character)
-        character.update(up, left, right, platforms)
+        character.update(eff_up, eff_left, eff_right, platforms)
 
         for e in allSprites:
             #flicker the character while invulnerable after a respawn
@@ -524,6 +530,8 @@ def end_screen(result):
                 if event.key == pygame.K_ESCAPE:
                     pygame.quit()
                     quit()
+            if kiosk_joy.is_action(event):
+                return
 
         screen.fill(DARK)
         t = big.render(msg, True, LITE)

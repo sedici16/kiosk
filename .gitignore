@@ -12,6 +12,9 @@ downwell_saved_games/
 # per-run high scores inside game templates
 game_templates/*/high_scores.txt
 
+# RetroPie push target (host + credentials) - local only
+retropie.json
+
 # OS / editor
 .DS_Store
 Thumbs.db

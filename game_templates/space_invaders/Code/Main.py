@@ -8,6 +8,8 @@ from Laser import Laser
 from random import choice, randint
 import os
 
+import kiosk_joy
+
 
 # File Importing (Changes Directory to Where the File is Saved)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -174,7 +176,7 @@ class Game:
             raise GameOver(False)
 
     def display_score(self):
-        score_surf = self.font.render(f"Score: {self.score}", False, "White")
+        score_surf = self.font.render("Score: {}".format(self.score), False, "White")
         score_rect = score_surf.get_rect(topleft = (10, -10))
         screen.blit(score_surf, score_rect)
 
@@ -224,6 +226,7 @@ class CRT:
 
 if __name__ == "__main__":
     pygame.init()
+    kiosk_joy.init()
     screen_width = 600
     screen_height = 600
     screen = pygame.display.set_mode((screen_width, screen_height))
@@ -260,6 +263,10 @@ if __name__ == "__main__":
                 elif event.key == pygame.K_ESCAPE:
                     pygame.quit()
                     sys.exit()
+            if kiosk_joy.is_action(event) and game_over:
+                game = Game()
+                game_over = False
+                game_won = False
             if event.type == ALIENLASER and not game_over:
                 game.alien_shoot()
 

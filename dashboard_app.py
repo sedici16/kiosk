@@ -17,6 +17,8 @@ try:
 except ImportError:
     Image = ImageTk = None
 
+import retropie_push
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "game_templates")
 SESSIONS_DIR = os.path.join(BASE_DIR, "downwell_sessions")
@@ -34,17 +36,25 @@ CLAUDE_MODEL = "sonnet"
 
 SESSION_MINUTES = 30
 
+# RetroPie push target - read from retropie.json (git-ignored). None => the
+# "Invia al RetroPie" button is hidden and nothing on the Pi is ever touched.
+RETROPIE_CFG = retropie_push.load_config()
+
 # how many frames to render before grabbing a thumbnail, per game
 THUMB_FRAMES = {"downwell": 160, "space_invaders": 130, "platformer": 220, "racing": 150}
 
 # Each game the visitor can pick. "run" is (script path, working dir) relative to
-# the session directory; "editors" are extra Downwell-only authoring tools.
+# the session directory; "editors" are extra Downwell-only authoring tools;
+# "pi_slot" is the fixed name of its Ports entry on the RetroPie (one per game,
+# each push overwrites it); "pi_data_dir" flags games needing DOWNWELL_DATA_DIR.
 GAMES = {
     "downwell": {
         "label": "Downwell",
         "blurb": "Scendi nel pozzo infinito sparando ai nemici e raccogliendo gemme.",
         "template": os.path.join(TEMPLATES_DIR, "downwell"),
         "run": ("downwell_clone.py", "."),
+        "pi_slot": "Downwell",
+        "pi_data_dir": True,
         "editors": [
             ("Modifica Livello", "level_editor.py"),
             ("Modifica Sprite", "asset_editor.py"),
@@ -56,6 +66,7 @@ GAMES = {
         "blurb": "Il classico arcade: difendi la Terra dagli alieni che scendono.",
         "template": os.path.join(TEMPLATES_DIR, "space_invaders"),
         "run": (os.path.join("Code", "Main.py"), "."),
+        "pi_slot": "Space Invaders",
         "editors": [],
     },
     "platformer": {
@@ -63,6 +74,7 @@ GAMES = {
         "blurb": "Un platform 2D: salta di piattaforma in piattaforma, prendi le monete, evita il fuoco.",
         "template": os.path.join(TEMPLATES_DIR, "platformer"),
         "run": ("index.py", "."),
+        "pi_slot": "Game of Crowns",
         "editors": [],
     },
     "racing": {
@@ -70,6 +82,7 @@ GAMES = {
         "blurb": "Sfreccia sulla strada, schiva le auto in arrivo e fai piu punti che puoi.",
         "template": os.path.join(TEMPLATES_DIR, "racing"),
         "run": ("race.py", "."),
+        "pi_slot": "Corsa Retro",
         "editors": [],
     },
 }
@@ -82,6 +95,9 @@ GUARDRAILS = (
     "- Fai la modifica piu piccola e mirata possibile per soddisfare la richiesta.\n"
     "- Non aggiungere nuove librerie o dipendenze, non scaricare nulla da internet.\n"
     "- Non cancellare file. Dopo la modifica il gioco deve restare eseguibile.\n"
+    "- Il codice deve restare compatibile con Python 3.5: NIENTE f-string "
+    "(usa \"...{}\".format(...)), niente operatore walrus, niente novita' "
+    "sintattiche successive alla 3.5.\n"
     "- Mantieni tutto adatto a famiglie e bambini.\n"
     "- Non eseguire comandi di shell e non provare a lanciare o compilare il gioco: "
     "limitati a leggere e modificare i file.\n"
@@ -250,6 +266,7 @@ class Dashboard:
         self.ai_running = False
         self.ai_proc = None
         self.can_undo = False
+        self.pi_sending = False
 
         self.container = tk.Frame(root, bg="#12141a")
         self.container.pack(fill="both", expand=True)
@@ -417,6 +434,16 @@ class Dashboard:
             command=self.play_game,
         )
         self.play_btn.pack(side="left", padx=(0, 10))
+
+        self.pi_btn = None
+        if RETROPIE_CFG and meta.get("pi_slot"):
+            self.pi_btn = tk.Button(
+                tools, text="Invia al cabinato (RetroPie)", font=self.button_font,
+                bg="#7a5cd0", fg="white", activebackground="#8f72e0", activeforeground="white",
+                relief="flat", padx=16, pady=10, command=self.send_to_retropie,
+            )
+            self.pi_btn.pack(side="left", padx=(0, 10))
+
         for text, script in meta["editors"]:
             tk.Button(
                 tools, text=text, font=self.button_font, bg="#2a2f3a", fg="white",
@@ -563,7 +590,7 @@ class Dashboard:
         self.ai_log.config(state="disabled")
 
     def apply_ai_request(self):
-        if self.ai_running:
+        if self.ai_running or self.pi_sending:
             return
         prompt = self.ai_entry.get().strip()
         if not prompt:
@@ -581,6 +608,8 @@ class Dashboard:
         self.ai_button.config(state="disabled", text="Lavoro...")
         self.ai_entry.config(state="disabled")
         self.undo_btn.config(state="disabled")
+        if self.pi_btn:
+            self.pi_btn.config(state="disabled")
         self._log_ai("  L'IA sta leggendo e modificando il gioco...")
         threading.Thread(target=self._run_claude, args=(prompt,), daemon=True).start()
 
@@ -661,6 +690,8 @@ class Dashboard:
         self.ai_proc = None
         self.ai_button.config(state="normal", text="Applica")
         self.ai_entry.config(state="normal")
+        if self.pi_btn:
+            self.pi_btn.config(state="normal")
 
         errors = compile_check(self.session_dir)
         if errors:
@@ -692,6 +723,43 @@ class Dashboard:
         self.can_undo = False
         self.undo_btn.config(state="disabled")
         self._log_ai("  Ultima modifica annullata: il gioco e' tornato com'era prima.")
+
+    # ---------------------------------------------------------- Send to RetroPie
+    def send_to_retropie(self):
+        if self.pi_sending or self.ai_running or not self.session_dir or not self.pi_btn:
+            return
+        meta = GAMES[self.game_key]
+        slot = meta["pi_slot"]
+        run_rel = meta["run"][0].replace("\\", "/")   # POSIX path for the Pi
+        self.pi_sending = True
+        self.pi_btn.config(state="disabled", text="Invio al cabinato...")
+        self._log_ai(f"\n> Invio \"{meta['label']}\" al cabinato RetroPie")
+        threading.Thread(
+            target=self._run_pi_push,
+            args=(slot, run_rel, self.session_dir, bool(meta.get("pi_data_dir"))),
+            daemon=True,
+        ).start()
+
+    def _run_pi_push(self, slot, run_rel, local_dir, data_dir_env):
+        def progress(msg):
+            self.root.after(0, lambda m=msg: self._log_ai(f"  [RetroPie] {m}"))
+        try:
+            ok, message = retropie_push.push(
+                slot, run_rel, local_dir, data_dir_env=data_dir_env, progress=progress
+            )
+        except Exception as exc:  # noqa: BLE001 - never let the thread die silently
+            ok, message = False, f"Errore imprevisto: {exc}"
+        self.root.after(0, lambda: self._finish_pi(ok, message))
+
+    def _finish_pi(self, ok, message):
+        self.pi_sending = False
+        if self.pi_btn:
+            self.pi_btn.config(state="normal", text="Invia al cabinato (RetroPie)")
+        self._log_ai(f"  {'OK' if ok else 'ERRORE'}: {message}")
+        if ok:
+            messagebox.showinfo("RetroPie", message)
+        else:
+            messagebox.showwarning("RetroPie", message)
 
     # ------------------------------------------------------------- Session end
     def end_session(self, save):
