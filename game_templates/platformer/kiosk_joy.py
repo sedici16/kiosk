@@ -108,3 +108,50 @@ def is_action(event):
     """True for a joystick button press event - the equivalent of the game's
     main one-shot key (jump / shoot / start / restart)."""
     return event.type == pygame.JOYBUTTONDOWN
+
+
+# ---- exit combo -----------------------------------------------------------
+# On the cabinet there is no keyboard, so every game needs a stick way out.
+# DragonRise pads (per RetroPie's config): button 1 = Select, 2 = Start,
+# 6/7 = shoulders. Accept Select+Start (the RetroPie-standard gesture) or both
+# shoulders, held briefly so a stray double-press during play can't quit.
+_QUIT_COMBOS = ((1, 2), (6, 7))
+QUIT_HOLD_FRAMES = 30           # ~0.5 s at 60 fps
+_quit_held = [0]
+
+
+def _combo_down():
+    for j in _sticks:
+        n = j.get_numbuttons()
+        for combo in _QUIT_COMBOS:
+            try:
+                if all(b < n and j.get_button(b) for b in combo):
+                    return True
+            except pygame.error:
+                pass
+    return False
+
+
+def wants_quit():
+    """Call once per frame. True once the exit combo (Select+Start, or both
+    shoulder buttons) has been held ~half a second - treat it like ESC."""
+    _quit_held[0] = _quit_held[0] + 1 if _combo_down() else 0
+    return _quit_held[0] >= QUIT_HOLD_FRAMES
+
+
+_hint_font = [None]
+
+
+def blit_exit_hint(surface):
+    """Small bottom-right 'hold Select+Start to exit' note. Safe to call every
+    frame; no-op if there is no joystick attached."""
+    if not _sticks:
+        return
+    if _hint_font[0] is None:
+        _hint_font[0] = pygame.font.Font(None, 22)
+    img = _hint_font[0].render("Select + Start  =  esci", True, (235, 235, 235))
+    bg = pygame.Surface((img.get_width() + 10, img.get_height() + 6), pygame.SRCALPHA)
+    bg.fill((0, 0, 0, 130))
+    w, h = surface.get_size()
+    surface.blit(bg, (w - bg.get_width() - 4, h - bg.get_height() - 4))
+    surface.blit(img, (w - img.get_width() - 9, h - img.get_height() - 7))

@@ -235,6 +235,8 @@ class Race:
     def run(self):
         while True:
             self.handle_events()
+            if kiosk_joy.wants_quit():
+                self.quit()
             if self.state == "PLAY":
                 self.update()
             elif self.state == "CRASH":
@@ -462,6 +464,8 @@ class Race:
             self._overlay("HAI PERSO", lines)
             if self.beaten_record:
                 self._draw_medal(s, WIN_W // 2, 130)
+
+        kiosk_joy.blit_exit_hint(s)
 
     def _draw_wreck(self, s, x, y):
         pygame.draw.rect(s, LITE, (x + 2, y + 8, CAR_W - 4, CAR_H - 16))

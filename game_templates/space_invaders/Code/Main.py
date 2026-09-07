@@ -270,6 +270,10 @@ if __name__ == "__main__":
             if event.type == ALIENLASER and not game_over:
                 game.alien_shoot()
 
+        if kiosk_joy.wants_quit():
+            pygame.quit()
+            sys.exit()
+
         screen.fill((30, 30, 30))
         if not game_over:
             try:
@@ -281,5 +285,6 @@ if __name__ == "__main__":
             draw_end_screen()
         crt.draw()
 
+        kiosk_joy.blit_exit_hint(screen)
         pygame.display.flip()
         clock.tick(60)

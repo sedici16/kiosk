@@ -414,6 +414,10 @@ def gameWorld(level):
                 if event.key == pygame.K_LEFT:
                     left = False
 
+        if kiosk_joy.wants_quit():
+            pygame.quit()
+            quit()
+
         # draw background
         screen.blit(background, (0, 0))
 
@@ -506,6 +510,7 @@ def gameWorld(level):
         ebar = max(0, int(energy / MAX_ENERGY * 200))
         pygame.draw.rect(screen, LITE, (14, 40, ebar, 12))
 
+        kiosk_joy.blit_exit_hint(screen)
         pygame.display.update()
         timer.tick(60)
 
@@ -532,6 +537,10 @@ def end_screen(result):
                     quit()
             if kiosk_joy.is_action(event):
                 return
+
+        if kiosk_joy.wants_quit():
+            pygame.quit()
+            quit()
 
         screen.fill(DARK)
         t = big.render(msg, True, LITE)

@@ -668,6 +668,7 @@ class DownwellClone:
             msg = self._text("end", "BOTTOM REACHED! press R to restart", (120, 255, 150))
             self.screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
 
+        kiosk_joy.blit_exit_hint(self.screen)
         pygame.display.flip()
 
 
@@ -693,6 +694,8 @@ def main():
                     game.reset()
                 else:
                     game.press_action()
+        if kiosk_joy.wants_quit():
+            running = False
         # Fixed 60 Hz physics, decoupled from render rate: on a slow machine the
         # game keeps its real speed by stepping update() more than once per frame
         # instead of running in slow motion.
