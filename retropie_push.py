@@ -100,10 +100,15 @@ def _upload_tree(sftp, local_dir, remote_dir):
 
 
 def _launcher(slot_dir, run_rel, data_dir_env):
-    lines = ["#!/bin/bash", "cd " + _shq(slot_dir)]
+    # cd into the script's own folder (some games chdir on import and assume
+    # that's already the cwd - e.g. Space Invaders' Code/ modules)
+    run_dir = posixpath.dirname(run_rel)
+    run_file = posixpath.basename(run_rel)
+    workdir = posixpath.join(slot_dir, run_dir) if run_dir else slot_dir
+    lines = ["#!/bin/bash", "cd " + _shq(workdir)]
     if data_dir_env:
         lines.append("export DOWNWELL_DATA_DIR=" + _shq(slot_dir))
-    lines.append("python3 " + run_rel)
+    lines.append("python3 " + run_file)
     return "\n".join(lines) + "\n"
 
 

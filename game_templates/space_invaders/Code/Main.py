@@ -1,18 +1,20 @@
 # Tutorial: https://youtu.be/o-6pADy5Mdg
 
-import pygame, sys
+import os
+import sys
+
+# cd to this file's folder BEFORE importing the sibling modules - some of them
+# also chdir on import, which would make __file__ resolve wrong if we waited.
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+import pygame
 from Player import Player
 import Obstacle
 from Alien import Alien, Extra
 from Laser import Laser
 from random import choice, randint
-import os
 
 import kiosk_joy
-
-
-# File Importing (Changes Directory to Where the File is Saved)
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 
 class GameOver(Exception):
