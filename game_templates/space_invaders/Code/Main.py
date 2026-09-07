@@ -234,8 +234,10 @@ if __name__ == "__main__":
     game = Game()
     crt = CRT()
 
-    ALIENLASER = pygame.USEREVENT + 1
-    pygame.time.set_timer(ALIENLASER, 800)
+    # Alien fire every 800 ms, timed off the frame clock. (pygame.time.set_timer
+    # spawns a thread that crashes with "take_gil: NULL tstate" on the Pi's old
+    # pygame 2.0.3 / Python 3.5 build.)
+    alien_shoot_ms = 0
 
     over_font = pygame.font.Font("../Font/Pixeled.ttf", 28)
     hint_font = pygame.font.Font("../Font/Pixeled.ttf", 14)
@@ -267,7 +269,11 @@ if __name__ == "__main__":
                 game = Game()
                 game_over = False
                 game_won = False
-            if event.type == ALIENLASER and not game_over:
+
+        if not game_over:
+            alien_shoot_ms += clock.get_time()
+            if alien_shoot_ms >= 800:
+                alien_shoot_ms = 0
                 game.alien_shoot()
 
         if kiosk_joy.wants_quit():
