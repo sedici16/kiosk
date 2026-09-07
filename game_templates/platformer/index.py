@@ -3,6 +3,7 @@ import pygame
 import os
 import random
 import kiosk_joy
+import kiosk_screen
 # Load assets relative to this file, regardless of the launcher's working dir.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 pygame.init()
@@ -517,7 +518,7 @@ def gameWorld(level):
         pygame.draw.rect(screen, LITE, (14, 40, ebar, 12))
 
         kiosk_joy.blit_exit_hint(screen)
-        pygame.display.update()
+        kiosk_screen.flip()
         timer.tick(60)
 
     pygame.mixer.music.stop()
@@ -555,12 +556,11 @@ def end_screen(result):
         screen.blit(h, h.get_rect(center=(HALF_WIDTH, HALF_HEIGHT + 35)))
         s = small.render("PUNTEGGIO " + str(score), True, LITE)
         screen.blit(s, s.get_rect(center=(HALF_WIDTH, HALF_HEIGHT + 75)))
-        pygame.display.flip()
+        kiosk_screen.flip()
 
 
-#Set screen name and creates window
-screen = pygame.display.set_mode(size)
-pygame.display.set_caption("Game of Crowns")
+#Set screen name and creates window (kiosk_screen centres it on the Pi)
+screen = kiosk_screen.setup(WIN_WIDTH, WIN_HEIGHT, "Game of Crowns")
 
 score = 0
 

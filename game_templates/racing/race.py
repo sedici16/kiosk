@@ -21,6 +21,7 @@ from sys import exit as sys_exit
 import pygame
 
 import kiosk_joy
+import kiosk_screen
 
 pygame.init()
 kiosk_joy.init()
@@ -141,8 +142,7 @@ def _star_points(cx, cy, r):
 
 class Race:
     def __init__(self):
-        self.screen = pygame.display.set_mode((WIN_W, WIN_H))
-        pygame.display.set_caption("Corsa Retro")
+        self.screen = kiosk_screen.setup(WIN_W, WIN_H, "Corsa Retro")
         self.canvas = pygame.Surface((WIN_W, WIN_H))
         self.clock = pygame.time.Clock()
 
@@ -257,7 +257,7 @@ class Race:
             self.shake = 0.0
         self.screen.fill(DARK)
         self.screen.blit(self.canvas, (ox, oy))
-        pygame.display.update()
+        kiosk_screen.flip()
 
     def handle_events(self):
         for ev in pygame.event.get():

@@ -23,6 +23,7 @@ from Laser import Laser
 from random import choice, randint
 
 import kiosk_joy
+import kiosk_screen
 
 
 class GameOver(Exception):
@@ -241,9 +242,9 @@ class CRT:
 if __name__ == "__main__":
     pygame.init()
     kiosk_joy.init()
-    screen_width = 600
-    screen_height = 600
-    screen = pygame.display.set_mode((screen_width, screen_height))
+    screen_width = 720 if ON_PI else 600
+    screen_height = 720 if ON_PI else 600
+    screen = kiosk_screen.setup(screen_width, screen_height, "Space Invaders")
     clock = pygame.time.Clock()
     game = Game()
     crt = CRT()
@@ -299,15 +300,12 @@ if __name__ == "__main__":
                 game_over = True
                 game_won = result.won
 
-        screen.fill((30, 30, 30), (0, 0, screen_width, screen_height))
+        screen.fill((30, 30, 30))
         if game_over:
             draw_end_screen()
         else:
             game.draw()
         if not ON_PI:
             crt.draw()
-        kiosk_joy.blit_exit_hint(screen, (0, 0, screen_width, screen_height))
-        if ON_PI:
-            pygame.display.update((0, 0, screen_width, screen_height))
-        else:
-            pygame.display.flip()
+        kiosk_joy.blit_exit_hint(screen)
+        kiosk_screen.flip()

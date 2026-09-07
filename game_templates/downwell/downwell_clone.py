@@ -6,6 +6,7 @@ import platform as _platform
 import pygame
 
 import kiosk_joy
+import kiosk_screen
 
 # The kiosk cabinet is a Raspberry Pi 3 (1.2 GHz ARM) - run leaner there.
 ON_PI = _platform.machine().lower().startswith(("arm", "aarch"))
@@ -26,7 +27,7 @@ OVERRIDES_FILE = os.path.join(BASE_DIR, "overrides.json")
 NUM_CHUNK_SLOTS = 4
 DEFAULT_REPEAT_COUNT = 10
 
-SCALE = 1.15 if ON_PI else 1.5  # window/tile/sprite/physics scale
+SCALE = 1.25 if ON_PI else 1.5  # window/tile/sprite/physics scale
 LEVEL_Y_START = int(80 * SCALE)
 
 # Physics tick rate. A little slower on the Pi - eases the pace and the load.
@@ -285,8 +286,7 @@ class DownwellClone:
             pygame.mixer.init(frequency=22050, size=-16, channels=1)
         except pygame.error:
             pass
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("Downwell Clone")
+        self.screen = kiosk_screen.setup(WIDTH, HEIGHT, "Downwell Clone")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont(None, int(28 * SCALE))
 
@@ -669,7 +669,7 @@ class DownwellClone:
             self.screen.blit(msg, msg.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
 
         kiosk_joy.blit_exit_hint(self.screen)
-        pygame.display.flip()
+        kiosk_screen.flip()
 
 
 STEP_MS = 1000.0 / SIM_HZ   # fixed physics timestep
