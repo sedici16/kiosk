@@ -1,9 +1,14 @@
 import os
 import json
 import random
+import bisect
+import platform as _platform
 import pygame
 
 import kiosk_joy
+
+# The kiosk cabinet is a Raspberry Pi 3 (1.2 GHz ARM) - run leaner there.
+ON_PI = _platform.machine().lower().startswith(("arm", "aarch"))
 
 # DOWNWELL_DATA_DIR lets a dashboard/session-manager point this same engine at a
 # per-user working copy of assets/levels/overrides without duplicating the code.
@@ -21,7 +26,7 @@ OVERRIDES_FILE = os.path.join(BASE_DIR, "overrides.json")
 NUM_CHUNK_SLOTS = 4
 DEFAULT_REPEAT_COUNT = 10
 
-SCALE = 1.5  # bumps window/tile/sprite size and all physics distances together, keeping the feel the same
+SCALE = 1.0 if ON_PI else 1.5  # window/tile/sprite/physics scale; smaller on the Pi for speed
 LEVEL_Y_START = int(80 * SCALE)
 
 WIDTH, HEIGHT = int(400 * SCALE), int(600 * SCALE)
@@ -40,7 +45,12 @@ SPIKE_SPAWN_CHANCE = 0.25
 POWERUP_SPAWN_CHANCE = 0.5
 
 PARTICLE_COLOR = (150, 150, 155)  # gray, matching the inert/terrain palette
-MAX_PARTICLES = 150
+MAX_PARTICLES = 30 if ON_PI else 150
+
+# Only entities within this vertical band of the player are checked/collided each
+# frame - the shaft holds thousands of platforms and iterating all of them was
+# the main cost on the Pi. Two screens of slack keeps fast falls safe.
+CULL_DIST = HEIGHT * 2
 
 RAPID_FIRE_INTERVAL = 6  # frames between auto-shots while the button is held
 POWERUP_DURATION = 60 * 8  # 8 seconds at 60fps
@@ -336,6 +346,16 @@ class DownwellClone:
 
         self.powerups = self._generate_powerups(self.shaft_height)
 
+        # platforms are static - keep them y-sorted so each frame can bisect out
+        # just the handful near the player instead of scanning the whole shaft.
+        self.platforms.sort(key=lambda p: p.y)
+        self._plat_ys = [p.y for p in self.platforms]
+
+    def _platforms_near(self, y):
+        lo = bisect.bisect_left(self._plat_ys, y - CULL_DIST)
+        hi = bisect.bisect_right(self._plat_ys, y + CULL_DIST)
+        return self.platforms[lo:hi]
+
     def _generate_shaft(self):
         platforms = []
         enemies = []
@@ -472,7 +492,8 @@ class DownwellClone:
             if not p.alive():
                 self.particles.remove(p)
 
-        for plat in self.platforms:
+        py = self.player_y
+        for plat in self._platforms_near(py):
             prect = plat.rect()
             if self.vel_y >= 0 and player_rect.colliderect(prect) and prev_bottom <= prect.top + 1:
                 self.player_y = prect.top - half
@@ -482,6 +503,8 @@ class DownwellClone:
                 player_rect.centery = int(self.player_y)
 
         for spike in self.spikes:
+            if abs(spike.y - py) > CULL_DIST:
+                continue
             if player_rect.colliderect(spike.rect()):
                 self._take_damage()
 
@@ -521,6 +544,8 @@ class DownwellClone:
                         break
 
         for enemy in self.enemies[:]:
+            if abs(enemy.y - py) > CULL_DIST:
+                continue
             if player_rect.colliderect(enemy.rect()):
                 if self.vel_y > 2 and prev_bottom <= enemy.rect().top + int(6 * SCALE):
                     self.enemies.remove(enemy)
@@ -531,6 +556,8 @@ class DownwellClone:
                     self._take_damage()
 
         for gem in self.gems[:]:
+            if abs(gem.y - py) > CULL_DIST:
+                continue
             if player_rect.colliderect(gem.rect()):
                 self.gems.remove(gem)
                 self.score += 10
@@ -553,13 +580,15 @@ class DownwellClone:
     def draw(self):
         self.screen.fill((14, 12, 22))
         cam_y = self.player_y - HEIGHT // 3
+        top, bot = cam_y - TILE, cam_y + HEIGHT
 
-        for plat in self.platforms:
+        for plat in self._platforms_near(cam_y + HEIGHT // 2):
+            if plat.y < top or plat.y > bot:      # off-camera - skip before any work
+                continue
             sy = plat.y - cam_y
-            if -TILE <= sy <= HEIGHT:
-                tile_img = self.terrain_tiles[plat.terrain_index]
-                for tx in range(plat.x, plat.x + plat.width, TILE):
-                    self.screen.blit(tile_img, (tx, sy))
+            tile_img = self.terrain_tiles[plat.terrain_index]
+            for tx in range(plat.x, plat.x + plat.width, TILE):
+                self.screen.blit(tile_img, (tx, sy))
 
         for spike in self.spikes:
             sy = spike.y - cam_y
@@ -636,9 +665,14 @@ class DownwellClone:
         pygame.display.flip()
 
 
+STEP_MS = 1000.0 / 60.0     # fixed physics timestep
+MAX_STEPS = 5               # cap catch-up steps so a hitch can't spiral
+
+
 def main():
     game = DownwellClone()
     running = True
+    acc = 0.0
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -653,11 +687,18 @@ def main():
                     game.reset()
                 else:
                     game.press_action()
+        # Fixed 60 Hz physics, decoupled from render rate: on a slow machine the
+        # game keeps its real speed by stepping update() more than once per frame
+        # instead of running in slow motion.
         keys = pygame.key.get_pressed()
-        game.handle_input(keys)
-        game.update()
+        acc += game.clock.tick(60)      # cap render at 60; sim below catches up if slower
+        steps = 0
+        while acc >= STEP_MS and steps < MAX_STEPS:
+            game.handle_input(keys)
+            game.update()
+            acc -= STEP_MS
+            steps += 1
         game.draw()
-        game.clock.tick(60)
     pygame.quit()
 
 
