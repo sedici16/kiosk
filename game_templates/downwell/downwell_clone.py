@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import random
 import bisect
 import platform as _platform
@@ -47,6 +48,9 @@ ENEMY_SPAWN_CHANCE = 0.35
 GEM_SPAWN_CHANCE = 0.4
 SPIKE_SPAWN_CHANCE = 0.25
 POWERUP_SPAWN_CHANCE = 0.5
+
+JELLY_SPAWN_CHANCE = 0.3          # grey jellyfish that drift side to side
+JELLY_SPEED = 1.4 * SCALE
 
 PARTICLE_COLOR = (150, 150, 155)  # gray, matching the inert/terrain palette
 MAX_PARTICLES = 40 if ON_PI else 150
@@ -171,6 +175,50 @@ def make_player_sprites(size):
         "fall_right": pygame.transform.rotate(fall, -20),
         "jump": jump,
     }
+
+
+def make_jelly_sprite(size):
+    """A grey jellyfish - translucent bell + wavy tentacles."""
+    W, H = size
+    BELL = (168, 172, 184)
+    RIM = (104, 108, 122)
+    GLOW = (208, 212, 224)
+    s = pygame.Surface((W, H), pygame.SRCALPHA)
+    bell = pygame.Rect(int(W * 0.08), 1, int(W * 0.84), int(H * 0.58))
+    pygame.draw.ellipse(s, BELL, bell)
+    pygame.draw.ellipse(s, RIM, bell, 2)
+    pygame.draw.circle(s, GLOW, (int(W * 0.38), int(H * 0.22)), max(2, int(W * 0.07)))
+    n = 5
+    for i in range(n):
+        tx = int(W * 0.18) + i * (int(W * 0.64) // (n - 1))
+        pts = [(tx, int(H * 0.52))]
+        for k in range(1, 5):
+            pts.append((tx + (3 if (k + i) % 2 else -3), int(H * 0.52) + k * (int(H * 0.46) // 4)))
+        pygame.draw.lines(s, BELL, False, pts, 2)
+    return s
+
+
+class Jelly:
+    """Grey jellyfish: drifts left/right at its own depth, bounces off the walls."""
+    def __init__(self, x, y):
+        self.x = float(x)
+        self.y = y
+        self.vx = random.choice((-1.0, 1.0)) * JELLY_SPEED
+        self.bob = random.uniform(0.0, 6.28)
+
+    def update(self):
+        self.x += self.vx
+        self.bob += 0.11
+        lo, hi = int(30 * SCALE), WIDTH - int(30 * SCALE)
+        if self.x < lo:
+            self.x, self.vx = lo, abs(self.vx)
+        elif self.x > hi:
+            self.x, self.vx = hi, -abs(self.vx)
+
+    def rect(self):
+        half = int(14 * SCALE)
+        size = int(28 * SCALE)
+        return pygame.Rect(int(self.x) - half, self.y - half, size, size)
 
 
 class Bullet:
@@ -362,6 +410,7 @@ class DownwellClone:
         self.terrain_tiles = load_terrain_tiles((TILE, TILE))
         self.player_sprites = make_player_sprites((int(30 * SCALE), int(36 * SCALE)))
         self.player_sprite = self.player_sprites["fall"]
+        self.jelly_sprite = make_jelly_sprite((int(30 * SCALE), int(34 * SCALE)))
         self.enemy_tile = load_sprite("enemy.png", (int(30 * SCALE), int(30 * SCALE)))
         self.gem_tile = load_sprite("gem.png", (int(18 * SCALE), int(18 * SCALE)))
         self.bullet_sprite = load_sprite("bullet.png", (int(10 * SCALE), int(10 * SCALE)))
@@ -427,6 +476,7 @@ class DownwellClone:
             self.shaft_height = SHAFT_HEIGHT
 
         self.powerups = self._generate_powerups(self.shaft_height)
+        self.jellies = self._generate_jellies(self.shaft_height)
 
         # platforms are static - keep them y-sorted so each frame can bisect out
         # just the handful near the player instead of scanning the whole shaft.
@@ -482,6 +532,17 @@ class DownwellClone:
                 powerups.append(PowerUp(x, y, kind))
             y += random.randint(step_min, step_max)
         return powerups
+
+    def _generate_jellies(self, shaft_height):
+        jellies = []
+        margin = int(45 * SCALE)
+        y = int(450 * SCALE)
+        step_min, step_max = int(280 * SCALE), int(620 * SCALE)
+        while y < shaft_height - int(120 * SCALE):
+            if random.random() < JELLY_SPAWN_CHANCE:
+                jellies.append(Jelly(random.randint(margin, WIDTH - margin), y))
+            y += random.randint(step_min, step_max)
+        return jellies
 
     def handle_input(self, keys):
         if self.game_over or self.win:
@@ -628,6 +689,30 @@ class DownwellClone:
                         self.bullets.remove(bullet)
                         break
 
+            if bullet in self.bullets:
+                for jelly in self.jellies[:]:
+                    if jelly.rect().collidepoint(bullet.x, bullet.y):
+                        self.jellies.remove(jelly)
+                        self.score += 30
+                        self._play("kill")
+                        self.bullets.remove(bullet)
+                        break
+
+        # grey jellyfish: drift side to side at their depth, hurt on contact
+        for jelly in self.jellies[:]:
+            if abs(jelly.y - py) > CULL_DIST:
+                continue
+            jelly.update()
+            jr = jelly.rect()
+            if player_rect.colliderect(jr):
+                if self.vel_y > 2 and prev_bottom <= jr.top + int(6 * SCALE):
+                    self.jellies.remove(jelly)
+                    self.score += 30
+                    self.vel_y = -8 * SCALE
+                    self._play("kill")
+                else:
+                    self._take_damage()
+
         for enemy in self.enemies[:]:
             if abs(enemy.y - py) > CULL_DIST:
                 continue
@@ -685,6 +770,12 @@ class DownwellClone:
             sy = enemy.y - cam_y
             if -margin_enemy <= sy <= HEIGHT:
                 self.screen.blit(self.enemy_tile, self.enemy_tile.get_rect(center=(enemy.x, sy)))
+
+        for jelly in self.jellies:
+            sy = jelly.y - cam_y + int(math.sin(jelly.bob) * 3 * SCALE)
+            if -margin_enemy <= sy <= HEIGHT:
+                self.screen.blit(self.jelly_sprite,
+                                 self.jelly_sprite.get_rect(center=(int(jelly.x), int(sy))))
 
         margin_gem = int(20 * SCALE)
         for gem in self.gems:
