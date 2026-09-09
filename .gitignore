@@ -8,6 +8,7 @@ venv/
 # Kiosk runtime data (created by dashboard_app.py next to the script)
 downwell_sessions/
 downwell_saved_games/
+usage_totals.json
 
 # per-run high scores inside game templates
 game_templates/*/high_scores.txt

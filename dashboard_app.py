@@ -25,14 +25,40 @@ SESSIONS_DIR = os.path.join(BASE_DIR, "downwell_sessions")
 SAVED_DIR = os.path.join(BASE_DIR, "downwell_saved_games")
 UNDO_DIR = os.path.join(SESSIONS_DIR, "_undo")
 GAME_SHOT = os.path.join(BASE_DIR, "_game_shot.py")
+USAGE_TOTALS_PATH = os.path.join(BASE_DIR, "usage_totals.json")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(SAVED_DIR, exist_ok=True)
 os.makedirs(UNDO_DIR, exist_ok=True)
 
+ZERO_USAGE = {"edits": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+
+
+def load_usage_totals():
+    """Running totals across the whole fair, persisted so an app restart
+    doesn't lose the day's spend. Delete usage_totals.json to reset them."""
+    try:
+        with open(USAGE_TOTALS_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {**ZERO_USAGE, **data}
+    except (OSError, ValueError):
+        return dict(ZERO_USAGE)
+
+
+def save_usage_totals(totals):
+    with open(USAGE_TOTALS_PATH, "w", encoding="utf-8") as fh:
+        json.dump(totals, fh, ensure_ascii=False, indent=2)
+
 CLAUDE_EXE = shutil.which("claude") or os.path.join(
     os.path.expanduser("~"), ".local", "bin", "claude.exe"
 )
-CLAUDE_MODEL = "sonnet"
+CLAUDE_MODEL = "sonnet"  # default if the visitor doesn't change it on the login screen
+
+# (cli alias, button label, short hint) - offered on the login screen
+MODEL_CHOICES = [
+    ("haiku", "Haiku", "veloce, economico"),
+    ("sonnet", "Sonnet", "bilanciato"),
+    ("opus", "Opus", "qualità massima"),
+]
 
 SESSION_MINUTES = 30
 
@@ -262,8 +288,12 @@ class Dashboard:
         self.session_dir = None
         self.session_name = None
         self.game_key = None
+        self.ai_model = CLAUDE_MODEL
         self.deadline = None
         self.timer_job = None
+
+        self.usage_totals = load_usage_totals()
+        self.session_usage = dict(ZERO_USAGE)
 
         self.ai_queue = queue.Queue()
         self.ai_running = False
@@ -303,15 +333,38 @@ class Dashboard:
 
         name_var = tk.StringVar()
         entry = tk.Entry(self.container, textvariable=name_var, font=self.button_font, width=24, justify="center")
-        entry.pack(pady=(0, 22))
+        entry.pack(pady=(0, 16))
         entry.focus_set()
+
+        model_var = tk.StringVar(value=self.ai_model)
+        model_row = tk.Frame(self.container, bg="#12141a")
+        model_row.pack(pady=(0, 22))
+        tk.Label(
+            model_row, text="Modello IA:", font=self.subtitle_font, fg="#c8ccd6", bg="#12141a",
+        ).pack(side="left", padx=(0, 10))
+        model_buttons = {}
+
+        def pick_model(m):
+            model_var.set(m)
+            for key, btn in model_buttons.items():
+                btn.config(bg="#3ea88f" if key == m else "#20242e")
+
+        for key, label, hint in MODEL_CHOICES:
+            btn = tk.Button(
+                model_row, text=f"{label}\n{hint}", font=("Segoe UI", 9, "bold"),
+                fg="white", relief="flat", padx=14, pady=6, justify="center",
+                activeforeground="white", command=lambda k=key: pick_model(k),
+            )
+            btn.pack(side="left", padx=4)
+            model_buttons[key] = btn
+        pick_model(model_var.get())
 
         cards = tk.Frame(self.container, bg="#12141a")
         cards.pack(pady=(0, 10))
 
         def start(game_key):
             name = name_var.get().strip() or "Ospite"
-            self.start_session(name, game_key)
+            self.start_session(name, game_key, model=model_var.get())
 
         for game_key, meta in GAMES.items():
             card = tk.Frame(cards, bg="#181b22", highlightbackground="#2a2f36", highlightthickness=1)
@@ -329,6 +382,12 @@ class Dashboard:
                 activebackground="#4fc2a8", activeforeground="white", relief="flat", padx=22, pady=10,
                 command=lambda k=game_key: start(k),
             ).pack(pady=(0, 14))
+
+        self.totals_usage_label = tk.Label(
+            self.container, text="", font=("Segoe UI", 9), fg="#5a5f6a", bg="#12141a",
+        )
+        self.totals_usage_label.pack(pady=(4, 0))
+        self._update_usage_labels()
 
         # ---- saved games: play again, or resume improving ----
         saved = list_saved()
@@ -361,7 +420,7 @@ class Dashboard:
 
         def resume(s):
             name = name_var.get().strip() or "Ospite"
-            self.start_session(name, s["game_key"], source_dir=s["dir"])
+            self.start_session(name, s["game_key"], source_dir=s["dir"], model=model_var.get())
 
         def delete(s):
             if not messagebox.askyesno(
@@ -396,7 +455,7 @@ class Dashboard:
                 relief="flat", padx=10, pady=4, command=lambda s=s: play(s),
             ).pack(side="right", padx=4, pady=6)
 
-    def start_session(self, name, game_key, source_dir=None):
+    def start_session(self, name, game_key, source_dir=None, model=None):
         meta = GAMES[game_key]
         source = source_dir or meta["template"]
         if not os.path.isdir(source):
@@ -409,6 +468,8 @@ class Dashboard:
         self.session_name = name
         self.game_key = game_key
         self.session_dir = session_dir
+        self.ai_model = model or CLAUDE_MODEL
+        self.session_usage = dict(ZERO_USAGE)
         self.deadline = time.time() + SESSION_MINUTES * 60
         self.can_undo = False
         self.show_main()
@@ -428,6 +489,18 @@ class Dashboard:
         ).pack(side="left")
         self.timer_label = tk.Label(top, text="30:00", font=self.mono_font, fg="#f0c674", bg="#12141a")
         self.timer_label.pack(side="right")
+
+        info_row = tk.Frame(self.container, bg="#12141a")
+        info_row.pack(fill="x", padx=24, pady=(0, 8))
+        tk.Label(
+            info_row, text=f"Modello IA: {self.ai_model.capitalize()}",
+            font=("Segoe UI", 9), fg="#8a8f9c", bg="#12141a",
+        ).pack(side="left")
+        self.session_usage_label = tk.Label(
+            info_row, text="", font=("Segoe UI", 9), fg="#8a8f9c", bg="#12141a",
+        )
+        self.session_usage_label.pack(side="left", padx=(18, 0))
+        self._update_usage_labels()
 
         tools = tk.Frame(self.container, bg="#12141a")
         tools.pack(fill="x", padx=20, pady=(10, 10))
@@ -624,7 +697,7 @@ class Dashboard:
             "--disallowedTools", "Bash", "PowerShell", "KillShell", "BashOutput",
             "WebFetch", "WebSearch", "Task", "TodoWrite", "NotebookEdit",
             "--permission-mode", "acceptEdits",
-            "--model", CLAUDE_MODEL,
+            "--model", self.ai_model,
             "--output-format", "stream-json", "--verbose",
         ]
         try:
@@ -655,6 +728,16 @@ class Dashboard:
                         self.ai_queue.put(("tool", self._describe_tool(block)))
             elif etype == "result":
                 final_text = event.get("result", "") or final_text
+                usage = event.get("usage") or {}
+                self.ai_queue.put(("usage", {
+                    "input_tokens": (
+                        usage.get("input_tokens", 0)
+                        + usage.get("cache_creation_input_tokens", 0)
+                        + usage.get("cache_read_input_tokens", 0)
+                    ),
+                    "output_tokens": usage.get("output_tokens", 0),
+                    "cost_usd": event.get("total_cost_usd") or 0.0,
+                }))
                 if event.get("is_error"):
                     self.ai_queue.put(("error", final_text or "L'IA ha riportato un errore."))
                 else:
@@ -680,6 +763,8 @@ class Dashboard:
                 kind, payload = self.ai_queue.get_nowait()
                 if kind in ("text", "tool"):
                     self._log_ai(payload)
+                elif kind == "usage":
+                    self._record_usage(payload)
                 elif kind == "done":
                     self._finish_ai(payload, ok=True)
                 elif kind == "error":
@@ -687,6 +772,33 @@ class Dashboard:
         except queue.Empty:
             pass
         self.root.after(150, self.poll_ai_queue)
+
+    def _record_usage(self, usage):
+        for d in (self.session_usage, self.usage_totals):
+            d["edits"] += 1
+            d["input_tokens"] += usage["input_tokens"]
+            d["output_tokens"] += usage["output_tokens"]
+            d["cost_usd"] += usage["cost_usd"]
+        save_usage_totals(self.usage_totals)
+        self._update_usage_labels()
+
+    def _update_usage_labels(self):
+        label = getattr(self, "session_usage_label", None)
+        if label is not None and label.winfo_exists():
+            u = self.session_usage
+            total_tokens = u["input_tokens"] + u["output_tokens"]
+            label.config(
+                text=f"Questa sessione: {u['edits']} modifiche - "
+                     f"{total_tokens:,} token - ${u['cost_usd']:.3f}"
+            )
+        label = getattr(self, "totals_usage_label", None)
+        if label is not None and label.winfo_exists():
+            t = self.usage_totals
+            total_tokens = t["input_tokens"] + t["output_tokens"]
+            label.config(
+                text=f"Totale fiera: {t['edits']} modifiche - "
+                     f"{total_tokens:,} token - ${t['cost_usd']:.3f}"
+            )
 
     def _finish_ai(self, message, ok):
         self.ai_running = False
