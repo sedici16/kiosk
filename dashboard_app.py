@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import json
 import time
 import shutil
@@ -9,6 +10,8 @@ import queue
 import compileall
 import io
 import contextlib
+import urllib.request
+import urllib.error
 import tkinter as tk
 from tkinter import font as tkfont, messagebox
 
@@ -53,12 +56,21 @@ CLAUDE_EXE = shutil.which("claude") or os.path.join(
 )
 CLAUDE_MODEL = "sonnet"  # default if the visitor doesn't change it on the login screen
 
+# Gemini is experimental: a single HTTP call (no Read/Edit tools like Claude
+# Code), reads/rewrites only the game's main "run" file. Needs GEMINI_API_KEY
+# set in the environment - the button/model choice is otherwise hidden.
+GEMINI_MODEL = "gemini-3.1-flash-lite"
+GEMINI_PRICE_IN_PER_M = 0.25   # $/1M input tokens
+GEMINI_PRICE_OUT_PER_M = 1.50  # $/1M output tokens
+
 # (cli alias, button label, short hint) - offered on the login screen
 MODEL_CHOICES = [
     ("haiku", "Haiku", "veloce, economico"),
     ("sonnet", "Sonnet", "bilanciato"),
     ("opus", "Opus", "qualità massima"),
 ]
+if os.environ.get("GEMINI_API_KEY"):
+    MODEL_CHOICES.append(("gemini", "Gemini", "sperimentale, molto economico"))
 
 SESSION_MINUTES = 30
 
@@ -131,6 +143,28 @@ GUARDRAILS = (
     "- Non eseguire comandi di shell e non provare a lanciare o compilare il gioco: "
     "limitati a leggere e modificare i file.\n"
     "- Alla fine rispondi in italiano, in 1-2 frasi, dicendo cosa hai cambiato.\n\n"
+    "Richiesta del visitatore: "
+)
+
+# Gemini non ha tool Read/Edit: gli mandiamo l'intero file e ci aspettiamo
+# indietro l'intero file modificato, testo puro (nessun markdown/spiegazione).
+GEMINI_GUARDRAILS = (
+    "Sei un assistente che modifica un piccolo videogioco in Python (Pygame) per un "
+    "visitatore di una fiera. Regole tassative:\n"
+    "- Modifica SOLTANTO la logica di gioco nel file che ti viene fornito.\n"
+    "- Fai la modifica piu piccola e mirata possibile per soddisfare la richiesta.\n"
+    "- Non aggiungere nuove librerie o dipendenze, non scaricare nulla da internet.\n"
+    "- Non cancellare funzionalita' esistenti. Dopo la modifica il gioco deve restare eseguibile.\n"
+    "- Il codice deve restare compatibile con Python 3.5: NIENTE f-string "
+    "(usa \"...{}\".format(...)), niente operatore walrus, niente novita' "
+    "sintattiche successive alla 3.5.\n"
+    "- NON toccare le righe che riguardano il cabinato: qualsiasi cosa con "
+    "ON_PI, SPD, FRAME_CAP, kiosk_joy, kiosk_screen, platform.machine, "
+    "pygame.display.set_mode. Modifica solo la logica di gioco.\n"
+    "- Mantieni tutto adatto a famiglie e bambini.\n\n"
+    "Rispondi SOLO con il contenuto completo e aggiornato del file, dalla prima "
+    "riga all'ultima, senza markdown, senza ``` attorno al codice, senza "
+    "spiegazioni prima o dopo.\n\n"
     "Richiesta del visitatore: "
 )
 
@@ -687,7 +721,8 @@ class Dashboard:
         if self.pi_btn:
             self.pi_btn.config(state="disabled")
         self._log_ai("  L'IA sta leggendo e modificando il gioco...")
-        threading.Thread(target=self._run_claude, args=(prompt,), daemon=True).start()
+        target = self._run_gemini if self.ai_model == "gemini" else self._run_claude
+        threading.Thread(target=target, args=(prompt,), daemon=True).start()
 
     def _run_claude(self, prompt):
         cmd = [
@@ -746,6 +781,123 @@ class Dashboard:
         rc = proc.wait()
         if rc != 0 and not final_text:
             self.ai_queue.put(("error", (err or f"Claude Code terminato con codice {rc}").strip()))
+
+    def _run_gemini(self, prompt):
+        """Sperimentale: niente tool Read/Edit come Claude Code, un'unica
+        chiamata HTTP che manda l'intero file "run" del gioco e si aspetta
+        indietro l'intero file modificato. Non tocca gli altri file (editor,
+        moduli separati) - per giochi multi-file la copertura e' parziale."""
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            self.ai_queue.put(("error", "Gemini non configurato: manca GEMINI_API_KEY."))
+            return
+
+        script_rel, _ = GAMES[self.game_key]["run"]
+        path = os.path.join(self.session_dir, script_rel)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                original = fh.read()
+        except OSError as exc:
+            self.ai_queue.put(("error", f"Impossibile leggere {script_rel}: {exc}"))
+            return
+
+        full_prompt = (
+            GEMINI_GUARDRAILS + prompt
+            + "\n\n--- " + script_rel + " ---\n" + original
+        )
+        body = json.dumps({"contents": [{"parts": [{"text": full_prompt}]}]}).encode("utf-8")
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            + GEMINI_MODEL + ":generateContent?key=" + api_key
+        )
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.load(resp)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            self.ai_queue.put(("error", f"Gemini ha risposto con errore {exc.code}: {detail[:300]}"))
+            return
+        except Exception as exc:  # noqa: BLE001 - rete/JSON, non deve far crashare la UI
+            self.ai_queue.put(("error", f"Impossibile contattare Gemini: {exc}"))
+            return
+
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            self.ai_queue.put(("error", "Gemini non ha restituito codice utilizzabile."))
+            return
+
+        text = re.sub(r"^```(?:python)?\s*", "", text.strip())
+        text = re.sub(r"\s*```$", "", text)
+
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError as exc:
+            self.ai_queue.put(("error", f"Impossibile scrivere {script_rel}: {exc}"))
+            return
+
+        usage = data.get("usageMetadata", {})
+        in_tok = usage.get("promptTokenCount", 0)
+        out_tok = usage.get("candidatesTokenCount", 0)
+        cost = in_tok / 1_000_000 * GEMINI_PRICE_IN_PER_M + out_tok / 1_000_000 * GEMINI_PRICE_OUT_PER_M
+        self.ai_queue.put(("usage", {
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "cost_usd": cost,
+        }))
+
+        # Gemini non ha potuto leggere gli altri file (Alien.py, gli assets, ...)
+        # quindi puo' scrivere codice sintatticamente valido ma che va in crash
+        # all'avvio (es. un colore/asset inventato che non esiste). Un
+        # py_compile non lo scoprirebbe: proviamo a far partire il gioco
+        # headless, e se crasha ripristiniamo subito il file di prima.
+        crash = self._smoke_test_game()
+        if crash:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(original)
+            self.ai_queue.put((
+                "error",
+                "Gemini ha scritto codice che va in crash all'avvio (probabilmente un "
+                "riferimento a qualcosa che non esiste, es. un colore/immagine). "
+                "Modifica annullata automaticamente, il file e' tornato com'era prima.\n"
+                "  Dettaglio: " + crash
+            ))
+            return
+
+        self.ai_queue.put(("done", f"Fatto con Gemini: modificato {script_rel}."))
+
+    def _smoke_test_game(self):
+        """Run the session's game headless for a few frames to catch runtime
+        crashes Gemini's blind single-file edits can introduce. Returns None
+        if it ran fine, or a short error string if it crashed/hung."""
+        if not os.path.exists(GAME_SHOT):
+            return None
+        script_rel, cwd_rel = GAMES[self.game_key]["run"]
+        out_png = os.path.join(self.session_dir, "_smoke_test.png")
+        frames = THUMB_FRAMES.get(self.game_key, 150)
+        env = env_for(self.game_key, self.session_dir)
+        env["SDL_VIDEODRIVER"] = "dummy"
+        env["SDL_AUDIODRIVER"] = "dummy"
+        try:
+            proc = subprocess.run(
+                [sys.executable, GAME_SHOT, os.path.join(self.session_dir, script_rel), out_png, str(frames)],
+                cwd=os.path.join(self.session_dir, cwd_rel), env=env,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=40,
+            )
+        except subprocess.TimeoutExpired:
+            return "il gioco non ha risposto entro 40 secondi."
+        finally:
+            if os.path.exists(out_png):
+                try:
+                    os.remove(out_png)
+                except OSError:
+                    pass
+        if proc.returncode != 0:
+            tail = (proc.stderr or "").strip().splitlines()
+            return tail[-1] if tail else f"uscito con codice {proc.returncode}."
+        return None
 
     @staticmethod
     def _describe_tool(block):

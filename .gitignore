@@ -16,6 +16,10 @@ game_templates/*/high_scores.txt
 # RetroPie push target (host + credentials) - local only
 retropie.json
 
+# kiosk process logs (redirected stdout/stderr)
+kiosk_stdout.log
+kiosk_stderr.log
+
 # OS / editor
 .DS_Store
 Thumbs.db
