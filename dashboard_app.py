@@ -310,7 +310,11 @@ class Dashboard:
     def __init__(self, root):
         self.root = root
         root.title("Postazione Fiera - Modifica il Gioco con l'IA")
-        root.geometry("1400x880")
+        screen_w = root.winfo_screenwidth()
+        screen_h = root.winfo_screenheight()
+        win_w = min(1400, screen_w)
+        win_h = min(880, screen_h - 80)  # leave room for the taskbar
+        root.geometry(f"{win_w}x{win_h}")
         root.configure(bg="#12141a")
 
         self.title_font = tkfont.Font(family="Segoe UI", size=22, weight="bold")
@@ -335,8 +339,32 @@ class Dashboard:
         self.can_undo = False
         self.pi_sending = False
 
-        self.container = tk.Frame(root, bg="#12141a")
-        self.container.pack(fill="both", expand=True)
+        # Whole-page scroll wrapper: on small/short screens the content can be
+        # taller than the window, so the page itself must scroll (not just the
+        # "Giochi salvati" list inside it), with a visible scrollbar as a
+        # fallback for anyone without a mouse wheel handy.
+        outer = tk.Frame(root, bg="#12141a")
+        outer.pack(fill="both", expand=True)
+        self._page_canvas = tk.Canvas(outer, bg="#12141a", highlightthickness=0)
+        page_sb = tk.Scrollbar(outer, orient="vertical", command=self._page_canvas.yview)
+        self._page_canvas.configure(yscrollcommand=page_sb.set)
+        page_sb.pack(side="right", fill="y")
+        self._page_canvas.pack(side="left", fill="both", expand=True)
+
+        self.container = tk.Frame(self._page_canvas, bg="#12141a")
+        self._page_window = self._page_canvas.create_window((0, 0), window=self.container, anchor="nw")
+        self.container.bind(
+            "<Configure>",
+            lambda e: self._page_canvas.configure(scrollregion=self._page_canvas.bbox("all")),
+        )
+        self._page_canvas.bind(
+            "<Configure>",
+            lambda e: self._page_canvas.itemconfig(self._page_window, width=e.width),
+        )
+        self._page_canvas.bind_all(
+            "<MouseWheel>",
+            lambda e: self._page_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
+        )
 
         self.show_login()
 

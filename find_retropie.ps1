@@ -38,7 +38,8 @@ function Update-RetropieConfig([string]$NewIp) {
         $cfg = [pscustomobject]@{ host = ""; user = "pi"; password = "raspberry"; ports_dir = "/home/pi/RetroPie/roms/ports" }
     }
     $cfg.host = $NewIp
-    ($cfg | ConvertTo-Json) | Set-Content -Encoding utf8 $ConfigPath
+    $json = ($cfg | ConvertTo-Json)
+    [System.IO.File]::WriteAllText($ConfigPath, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "retropie.json aggiornato: host = $NewIp" -ForegroundColor Green
 }
 
