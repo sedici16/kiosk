@@ -232,6 +232,20 @@ def list_saved():
     return out
 
 
+def _rmtree_retry(path, tries=6, delay=0.5):
+    """shutil.rmtree that tolerates a just-closed game window still holding a
+    Windows file lock inside `path` for a moment, instead of raising and
+    leaving the folder half-deleted (and any undo/AI-edit snapshot with it)."""
+    for attempt in range(tries):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(delay)
+
+
 def launch_game_dir(game_key, folder):
     """Run the game located in `folder` (a template, session, or saved copy)."""
     script_rel, cwd_rel = GAMES[game_key]["run"]
@@ -314,7 +328,7 @@ class Dashboard:
         screen_h = root.winfo_screenheight()
         win_w = min(1400, screen_w)
         win_h = min(880, screen_h - 80)  # leave room for the taskbar
-        root.geometry(f"{win_w}x{win_h}")
+        root.geometry("{}x{}".format(win_w, win_h))
         root.configure(bg="#12141a")
 
         self.title_font = tkfont.Font(family="Segoe UI", size=22, weight="bold")
@@ -413,7 +427,7 @@ class Dashboard:
 
         for key, label, hint in MODEL_CHOICES:
             btn = tk.Button(
-                model_row, text=f"{label}\n{hint}", font=("Segoe UI", 9, "bold"),
+                model_row, text="{}\n{}".format(label, hint), font=("Segoe UI", 9, "bold"),
                 fg="white", relief="flat", padx=14, pady=6, justify="center",
                 activeforeground="white", command=lambda k=key: pick_model(k),
             )
@@ -486,7 +500,7 @@ class Dashboard:
 
         def delete(s):
             if not messagebox.askyesno(
-                "Elimina", f"Eliminare definitivamente il gioco salvato\n\"{s['label']} - {s['name']}\"?"
+                "Elimina", "Eliminare definitivamente il gioco salvato\n\"{} - {}\"?".format(s['label'], s['name'])
             ):
                 return
             shutil.rmtree(s["dir"], ignore_errors=True)
@@ -498,9 +512,9 @@ class Dashboard:
             rthumb = get_thumb(s["game_key"], folder=s["dir"], size=(72, 54))
             if rthumb is not None:
                 tk.Label(row, image=rthumb, bg="#20242e").pack(side="left", padx=(8, 4), pady=6)
-            txt = f"{s['label']}  -  {s['name']}"
+            txt = "{}  -  {}".format(s['label'], s['name'])
             if s["when"]:
-                txt += f"   ({s['when']})"
+                txt += "   ({})".format(s['when'])
             tk.Label(
                 row, text=txt, font=("Segoe UI", 10), fg="white", bg="#20242e", anchor="w",
             ).pack(side="left", fill="x", expand=True, padx=10, pady=8)
@@ -521,10 +535,10 @@ class Dashboard:
         meta = GAMES[game_key]
         source = source_dir or meta["template"]
         if not os.path.isdir(source):
-            messagebox.showerror("Errore", f"Cartella di origine mancante:\n{source}")
+            messagebox.showerror("Errore", "Cartella di origine mancante:\n{}".format(source))
             return
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        session_dir = os.path.join(SESSIONS_DIR, f"{stamp}_{game_key}_{safe_session_name(name)}")
+        session_dir = os.path.join(SESSIONS_DIR, "{}_{}_{}".format(stamp, game_key, safe_session_name(name)))
         shutil.copytree(source, session_dir)
 
         self.session_name = name
@@ -546,7 +560,7 @@ class Dashboard:
         top = tk.Frame(self.container, bg="#12141a")
         top.pack(fill="x", padx=20, pady=(16, 6))
         tk.Label(
-            top, text=f"{meta['label']} - sessione di {self.session_name}",
+            top, text="{} - sessione di {}".format(meta['label'], self.session_name),
             font=self.title_font, fg="#7fd8c8", bg="#12141a",
         ).pack(side="left")
         self.timer_label = tk.Label(top, text="30:00", font=self.mono_font, fg="#f0c674", bg="#12141a")
@@ -555,7 +569,7 @@ class Dashboard:
         info_row = tk.Frame(self.container, bg="#12141a")
         info_row.pack(fill="x", padx=24, pady=(0, 8))
         tk.Label(
-            info_row, text=f"Modello IA: {self.ai_model.capitalize()}",
+            info_row, text="Modello IA: {}".format(self.ai_model.capitalize()),
             font=("Segoe UI", 9), fg="#8a8f9c", bg="#12141a",
         ).pack(side="left")
         self.session_usage_label = tk.Label(
@@ -628,7 +642,7 @@ class Dashboard:
             self.ai_button.config(state="disabled")
         else:
             self._log_ai(
-                f"Pronto. Stai modificando {meta['label']}. Esempi: "
+                "Pronto. Stai modificando {}. Esempi: ".format(meta['label']) +
                 "\"rendi il giocatore piu veloce\", \"aggiungi un punteggio piu alto per i nemici gialli\", "
                 "\"cambia il colore dello sfondo in blu notte\"."
             )
@@ -700,7 +714,7 @@ class Dashboard:
             self.end_session(save=True)
             return
         mins, secs = divmod(remaining, 60)
-        self.timer_label.config(text=f"{mins:02d}:{secs:02d}")
+        self.timer_label.config(text="{:02d}:{:02d}".format(mins, secs))
         if remaining <= 60:
             self.timer_label.config(fg="#e05a5a")
         self.timer_job = self.root.after(1000, self.tick_timer)
@@ -734,12 +748,12 @@ class Dashboard:
         if not prompt:
             return
         self.ai_entry.delete(0, "end")
-        self._log_ai(f"\n> {prompt}")
+        self._log_ai("\n> {}".format(prompt))
 
         # Snapshot for undo.
         undo_path = os.path.join(UNDO_DIR, os.path.basename(self.session_dir))
         if os.path.isdir(undo_path):
-            shutil.rmtree(undo_path)
+            _rmtree_retry(undo_path)
         shutil.copytree(self.session_dir, undo_path)
 
         self.ai_running = True
@@ -770,7 +784,7 @@ class Dashboard:
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
             )
         except OSError as exc:
-            self.ai_queue.put(("error", f"Impossibile avviare Claude Code: {exc}"))
+            self.ai_queue.put(("error", "Impossibile avviare Claude Code: {}".format(exc)))
             return
         self.ai_proc = proc
         final_text = ""
@@ -808,7 +822,7 @@ class Dashboard:
         err = proc.stderr.read()
         rc = proc.wait()
         if rc != 0 and not final_text:
-            self.ai_queue.put(("error", (err or f"Claude Code terminato con codice {rc}").strip()))
+            self.ai_queue.put(("error", (err or "Claude Code terminato con codice {}".format(rc)).strip()))
 
     def _run_gemini(self, prompt):
         """Sperimentale: niente tool Read/Edit come Claude Code, un'unica
@@ -826,7 +840,7 @@ class Dashboard:
             with open(path, "r", encoding="utf-8") as fh:
                 original = fh.read()
         except OSError as exc:
-            self.ai_queue.put(("error", f"Impossibile leggere {script_rel}: {exc}"))
+            self.ai_queue.put(("error", "Impossibile leggere {}: {}".format(script_rel, exc)))
             return
 
         full_prompt = (
@@ -844,10 +858,10 @@ class Dashboard:
                 data = json.load(resp)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")
-            self.ai_queue.put(("error", f"Gemini ha risposto con errore {exc.code}: {detail[:300]}"))
+            self.ai_queue.put(("error", "Gemini ha risposto con errore {}: {}".format(exc.code, detail[:300])))
             return
         except Exception as exc:  # noqa: BLE001 - rete/JSON, non deve far crashare la UI
-            self.ai_queue.put(("error", f"Impossibile contattare Gemini: {exc}"))
+            self.ai_queue.put(("error", "Impossibile contattare Gemini: {}".format(exc)))
             return
 
         try:
@@ -863,7 +877,7 @@ class Dashboard:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(text)
         except OSError as exc:
-            self.ai_queue.put(("error", f"Impossibile scrivere {script_rel}: {exc}"))
+            self.ai_queue.put(("error", "Impossibile scrivere {}: {}".format(script_rel, exc)))
             return
 
         usage = data.get("usageMetadata", {})
@@ -894,7 +908,7 @@ class Dashboard:
             ))
             return
 
-        self.ai_queue.put(("done", f"Fatto con Gemini: modificato {script_rel}."))
+        self.ai_queue.put(("done", "Fatto con Gemini: modificato {}.".format(script_rel)))
 
     def _smoke_test_game(self):
         """Run the session's game headless for a few frames to catch runtime
@@ -924,7 +938,7 @@ class Dashboard:
                     pass
         if proc.returncode != 0:
             tail = (proc.stderr or "").strip().splitlines()
-            return tail[-1] if tail else f"uscito con codice {proc.returncode}."
+            return tail[-1] if tail else "uscito con codice {}.".format(proc.returncode)
         return None
 
     @staticmethod
@@ -935,7 +949,7 @@ class Dashboard:
         if target:
             target = os.path.basename(str(target))
         labels = {"Read": "Leggo", "Edit": "Modifico", "Write": "Riscrivo", "Glob": "Cerco", "Grep": "Cerco"}
-        return f"  - {labels.get(name, name)} {target}".rstrip()
+        return "  - {} {}".format(labels.get(name, name), target).rstrip()
 
     def poll_ai_queue(self):
         try:
@@ -968,16 +982,18 @@ class Dashboard:
             u = self.session_usage
             total_tokens = u["input_tokens"] + u["output_tokens"]
             label.config(
-                text=f"Questa sessione: {u['edits']} modifiche - "
-                     f"{total_tokens:,} token - ${u['cost_usd']:.3f}"
+                text="Questa sessione: {} modifiche - {:,} token - ${:.3f}".format(
+                    u['edits'], total_tokens, u['cost_usd']
+                )
             )
         label = getattr(self, "totals_usage_label", None)
         if label is not None and label.winfo_exists():
             t = self.usage_totals
             total_tokens = t["input_tokens"] + t["output_tokens"]
             label.config(
-                text=f"Totale fiera: {t['edits']} modifiche - "
-                     f"{total_tokens:,} token - ${t['cost_usd']:.3f}"
+                text="Totale fiera: {} modifiche - {:,} token - ${:.3f}".format(
+                    t['edits'], total_tokens, t['cost_usd']
+                )
             )
 
     def _finish_ai(self, message, ok):
@@ -997,10 +1013,10 @@ class Dashboard:
             )
         elif ok:
             if message:
-                self._log_ai(f"  {message}")
+                self._log_ai("  {}".format(message))
             self._log_ai("  Fatto. Premi 'Gioca' per provare.")
         else:
-            self._log_ai(f"  Non e' andata a buon fine: {message}")
+            self._log_ai("  Non e' andata a buon fine: {}".format(message))
             self._log_ai("  Puoi riprovare, o premere 'Annulla ultima modifica'.")
 
         self.can_undo = True
@@ -1013,7 +1029,7 @@ class Dashboard:
         if not os.path.isdir(undo_path):
             self._log_ai("  Niente da annullare.")
             return
-        shutil.rmtree(self.session_dir)
+        _rmtree_retry(self.session_dir)
         shutil.copytree(undo_path, self.session_dir)
         self.can_undo = False
         self.undo_btn.config(state="disabled")
@@ -1028,7 +1044,7 @@ class Dashboard:
         run_rel = meta["run"][0].replace("\\", "/")   # POSIX path for the Pi
         self.pi_sending = True
         self.pi_btn.config(state="disabled", text="Invio al cabinato...")
-        self._log_ai(f"\n> Invio \"{meta['label']}\" al cabinato RetroPie")
+        self._log_ai("\n> Invio \"{}\" al cabinato RetroPie".format(meta['label']))
         threading.Thread(
             target=self._run_pi_push,
             args=(slot, run_rel, self.session_dir, bool(meta.get("pi_data_dir"))),
@@ -1037,20 +1053,20 @@ class Dashboard:
 
     def _run_pi_push(self, slot, run_rel, local_dir, data_dir_env):
         def progress(msg):
-            self.root.after(0, lambda m=msg: self._log_ai(f"  [RetroPie] {m}"))
+            self.root.after(0, lambda m=msg: self._log_ai("  [RetroPie] {}".format(m)))
         try:
             ok, message = retropie_push.push(
                 slot, run_rel, local_dir, data_dir_env=data_dir_env, progress=progress
             )
         except Exception as exc:  # noqa: BLE001 - never let the thread die silently
-            ok, message = False, f"Errore imprevisto: {exc}"
+            ok, message = False, "Errore imprevisto: {}".format(exc)
         self.root.after(0, lambda: self._finish_pi(ok, message))
 
     def _finish_pi(self, ok, message):
         self.pi_sending = False
         if self.pi_btn:
             self.pi_btn.config(state="normal", text="Invia al cabinato (RetroPie)")
-        self._log_ai(f"  {'OK' if ok else 'ERRORE'}: {message}")
+        self._log_ai("  {}: {}".format('OK' if ok else 'ERRORE', message))
         if ok:
             messagebox.showinfo("RetroPie", message)
         else:
@@ -1066,7 +1082,7 @@ class Dashboard:
         if save and self.session_dir:
             stamp = time.strftime("%Y%m%d_%H%M%S")
             dest = os.path.join(
-                SAVED_DIR, f"{stamp}_{self.game_key}_{safe_session_name(self.session_name)}"
+                SAVED_DIR, "{}_{}_{}".format(stamp, self.game_key, safe_session_name(self.session_name))
             )
             shutil.copytree(self.session_dir, dest)
             try:
@@ -1077,7 +1093,7 @@ class Dashboard:
                 pass
             gk = self.game_key
             threading.Thread(target=snapshot_game, args=(gk, dest), daemon=True).start()
-            messagebox.showinfo("Salvato", f"Partita salvata come {os.path.basename(dest)}")
+            messagebox.showinfo("Salvato", "Partita salvata come {}".format(os.path.basename(dest)))
         undo_path = os.path.join(UNDO_DIR, os.path.basename(self.session_dir)) if self.session_dir else None
         if undo_path and os.path.isdir(undo_path):
             shutil.rmtree(undo_path, ignore_errors=True)
