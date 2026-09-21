@@ -240,6 +240,11 @@ class CRT:
 
 
 if __name__ == "__main__":
+    # buffer grande: sul Pi il jack analogico (driver bcm2835, poco affidabile)
+    # va in underrun e ammutolisce l'audio dopo pochi secondi se il buffer di
+    # default e' troppo piccolo per reggere i rallentamenti della CPU durante
+    # il rendering del gioco
+    pygame.mixer.pre_init(buffer=4096)
     pygame.init()
     kiosk_joy.init()
     screen_width = 720 if ON_PI else 600

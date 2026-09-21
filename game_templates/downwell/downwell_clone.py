@@ -391,7 +391,11 @@ class DownwellClone:
         pygame.init()
         kiosk_joy.init()
         try:
-            pygame.mixer.init(frequency=22050, size=-16, channels=1)
+            # buffer grande: sul Pi il jack analogico (driver bcm2835, poco
+            # affidabile) va in underrun e ammutolisce l'audio dopo pochi
+            # secondi se il buffer di default e' troppo piccolo per reggere
+            # i rallentamenti della CPU durante il rendering del gioco
+            pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=4096)
         except pygame.error:
             pass
         self.screen = kiosk_screen.setup(WIDTH, HEIGHT, "Il Pozzo")

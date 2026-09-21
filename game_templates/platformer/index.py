@@ -379,7 +379,11 @@ def gameWorld(level):
     monsters = []
     monster_timer = random.randint(MONSTER_MIN_GAP, MONSTER_MAX_GAP)
 
-    pygame.mixer.init()
+    # buffer grande: sul Pi il jack analogico (driver bcm2835, poco affidabile)
+    # va in underrun e ammutolisce l'audio dopo pochi secondi se il buffer di
+    # default e' troppo piccolo per reggere i rallentamenti della CPU durante
+    # il rendering del gioco
+    pygame.mixer.init(buffer=4096)
     coin = pygame.mixer.Sound("coinsound.wav")
     jump = pygame.mixer.Sound("jumpsound.wav")
     pygame.mixer.music.load("amazinbgmusic.mp3")
